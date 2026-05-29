@@ -1,39 +1,35 @@
-import { randomUUID } from "node:crypto"
-
 import type { SessionEvent } from "../domain/events"
 import type { StartRunInput } from "../domain/sessions"
-import type { AgentEventStreamWriter, SessionReplayStore } from "./ports"
+import type { AgentRunStreamClient, SessionReplayStore } from "./ports"
+import { createAgentRunStreamClient } from "../infrastructure/agent_client"
 import { memoryReplayStore } from "../infrastructure/replay_store"
-import { memoryStreamWriter } from "../infrastructure/redis_stream"
 
 export type StartRunDependencies = {
   replayStore: SessionReplayStore
-  streamWriter: AgentEventStreamWriter
+  agentClient: AgentRunStreamClient
 }
 
 const defaultDependencies: StartRunDependencies = {
   replayStore: memoryReplayStore,
-  streamWriter: memoryStreamWriter,
+  agentClient: createAgentRunStreamClient({
+    baseUrl: process.env.KOKORO_AGENT_BASE_URL ?? "http://127.0.0.1:8001",
+  }),
 }
 
 export async function startRun(
   input: StartRunInput,
   dependencies: StartRunDependencies = defaultDependencies,
 ) {
-  const runId = `run_${randomUUID().slice(0, 8)}`
-  const stream = `session:${input.sessionId}:agent`
-  const events: SessionEvent[] = [
-    { event: "run.created", runId },
-    { event: "message.delta", runId, delta: `Kokoro received: ${input.input}` },
-    { event: "message.completed", runId, content: `Kokoro received: ${input.input}` },
-    { event: "run.completed", runId },
-  ]
+  const events: SessionEvent[] = []
 
-  for (const event of events) {
-    await dependencies.streamWriter.append(stream, event)
+  for await (const event of dependencies.agentClient.streamRun(input)) {
+    events.push(event)
   }
 
   dependencies.replayStore.append(input.sessionId, events)
 
-  return { runId, events }
+  return {
+    runId: events.at(0)?.run_id ?? "",
+    events,
+  }
 }
