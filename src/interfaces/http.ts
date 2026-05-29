@@ -1,9 +1,21 @@
 import { createServer } from "node:http"
 
+import type { SessionReplayStore } from "../application/ports"
 import { startRun } from "../application/start_run"
 import { memoryReplayStore } from "../infrastructure/replay_store"
+import { toSseChunk } from "../infrastructure/sse"
 
-export function buildServer() {
+export type BuildServerDependencies = {
+  replayStore: SessionReplayStore
+}
+
+const defaultDependencies: BuildServerDependencies = {
+  replayStore: memoryReplayStore,
+}
+
+export function buildServer(
+  dependencies: BuildServerDependencies = defaultDependencies,
+) {
   return createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/sessions/ses_01/runs") {
       const result = await startRun({
@@ -23,8 +35,8 @@ export function buildServer() {
         connection: "keep-alive",
       })
 
-      for (const event of memoryReplayStore.read("ses_01")) {
-        res.write(`data: ${JSON.stringify(event)}\n\n`)
+      for (const event of dependencies.replayStore.read("ses_01")) {
+        res.write(toSseChunk(event))
       }
       res.end()
       return

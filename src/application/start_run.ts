@@ -2,10 +2,24 @@ import { randomUUID } from "node:crypto"
 
 import type { SessionEvent } from "../domain/events"
 import type { StartRunInput } from "../domain/sessions"
+import type { AgentEventStreamWriter, SessionReplayStore } from "./ports"
 import { memoryReplayStore } from "../infrastructure/replay_store"
 import { memoryStreamWriter } from "../infrastructure/redis_stream"
 
-export async function startRun(input: StartRunInput) {
+export type StartRunDependencies = {
+  replayStore: SessionReplayStore
+  streamWriter: AgentEventStreamWriter
+}
+
+const defaultDependencies: StartRunDependencies = {
+  replayStore: memoryReplayStore,
+  streamWriter: memoryStreamWriter,
+}
+
+export async function startRun(
+  input: StartRunInput,
+  dependencies: StartRunDependencies = defaultDependencies,
+) {
   const runId = `run_${randomUUID().slice(0, 8)}`
   const stream = `session:${input.sessionId}:agent`
   const events: SessionEvent[] = [
@@ -16,10 +30,10 @@ export async function startRun(input: StartRunInput) {
   ]
 
   for (const event of events) {
-    await memoryStreamWriter.append(stream, event)
+    await dependencies.streamWriter.append(stream, event)
   }
 
-  memoryReplayStore.append(input.sessionId, events)
+  dependencies.replayStore.append(input.sessionId, events)
 
   return { runId, events }
 }
