@@ -1,11 +1,10 @@
-import type { SessionEvent } from "../domain/events"
-import type { StartRunInput } from "../domain/sessions"
+import type { StreamPort } from "../infrastructure/stream-port"
+import type { ReplayStore } from "../infrastructure/replay_store"
 
-export interface SessionReplayStore {
-  append(sessionId: string, events: SessionEvent[]): void
-  read(sessionId: string): SessionEvent[]
-}
+// 应用层端口聚合，方便接口层注入。
+export type { StreamPort, ReplayStore }
 
-export interface AgentRunStreamClient {
-  streamRun(input: StartRunInput): AsyncIterable<SessionEvent>
+// run_id 生成器：可注入以便测试确定性。
+export interface RunIdFactory {
+  (): string
 }

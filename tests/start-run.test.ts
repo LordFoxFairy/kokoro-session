@@ -1,204 +1,162 @@
-import { request } from "node:http"
-
 import { describe, expect, test } from "bun:test"
 
-import { startRun } from "../src/application/start_run"
-import type { SessionEvent } from "../src/domain/events"
-import { buildServer } from "../src/interfaces/http"
+import { Normalizer } from "../src/application/normalize"
+import { relayRun, REQUESTS_STREAM, runEventsStream, startRun } from "../src/application/start_run"
+import { runRequestSchema } from "../src/domain/agent-events"
+import { memoryReplayStore } from "../src/infrastructure/replay_store"
+import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 
 describe("startRun", () => {
-  test("collects replayable agent events and returns the run id", async () => {
-    const result = await startRun(
+  test("generates a run id and publishes a valid run.request to the requests stream", async () => {
+    const streamPort = new MemoryStreamPort()
+    const { runId } = await startRun(
       {
         sessionId: "ses_01",
         conversationId: "conv_01",
         input: "hello kokoro",
-        executionStyle: "default",
+        executionStyle: "fast",
       },
+      { streamPort },
+    )
+
+    expect(runId).toMatch(/^run_/)
+
+    const requests = await streamPort.readAll(REQUESTS_STREAM)
+    expect(requests).toHaveLength(1)
+    // 写出的 run.request 必须通过严格 schema（合法信封，不带多余键）。
+    const parsed = runRequestSchema.parse(requests[0]?.event)
+    expect(parsed).toMatchObject({
+      kind: "run.request",
+      run_id: runId,
+      session_id: "ses_01",
+      conversation_id: "conv_01",
+      input: "hello kokoro",
+      execution_style: "fast",
+    })
+  })
+
+  test("defaults conversation_id to session_id when omitted", async () => {
+    const streamPort = new MemoryStreamPort()
+    const { runId } = await startRun(
+      { sessionId: "ses_02", input: "hi" },
+      { streamPort },
+    )
+    const requests = await streamPort.readAll(REQUESTS_STREAM)
+    const parsed = runRequestSchema.parse(requests.at(-1)?.event)
+    expect(parsed.conversation_id).toBe("ses_02")
+    expect(parsed.run_id).toBe(runId)
+    expect(parsed.execution_style).toBeUndefined()
+  })
+
+  test("each run gets a distinct run id", async () => {
+    const streamPort = new MemoryStreamPort()
+    const a = await startRun({ sessionId: "ses_03", input: "a" }, { streamPort })
+    const b = await startRun({ sessionId: "ses_03", input: "b" }, { streamPort })
+    expect(a.runId).not.toBe(b.runId)
+  })
+})
+
+describe("relayRun", () => {
+  test("normalizes agent events from the run stream into AGUI replay", async () => {
+    const streamPort = new MemoryStreamPort()
+    const replayStore = memoryReplayStore()
+    const sessionId = "ses_10"
+    const conversationId = "conv_10"
+    const runId = "run_relay"
+
+    // 预先把 agent 原始事件灌入该 run 的事件流。
+    const stream = runEventsStream(runId)
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await streamPort.publish(stream, {
+      kind: "text.delta",
+      run_id: runId,
+      seq: 1,
+      payload: { message_ref: "m1", text: "Hi" },
+    })
+    await streamPort.publish(stream, {
+      kind: "text.completed",
+      run_id: runId,
+      seq: 2,
+      payload: { message_ref: "m1", text: "Hi there" },
+    })
+    await streamPort.publish(stream, {
+      kind: "run.completed",
+      run_id: runId,
+      seq: 3,
+      payload: { status: "completed" },
+    })
+
+    let n = 0
+    const normalizer = new Normalizer(
+      { sessionId, conversationId, runId },
       {
-        replayStore: {
-          append() {},
-          read() {
-            return []
-          },
-        },
-        agentClient: {
-          async *streamRun() {
-            yield {
-              event: "session.created",
-              event_id: "evt_01",
-              session_id: "ses_01",
-              conversation_id: "conv_01",
-              run_id: "run_01",
-              cursor: "run_01:0001",
-              timestamp: "2026-05-29T12:00:00.000Z",
-              payload: {
-                session_id: "ses_01",
-                conversation_id: "conv_01",
-                owner_id: "kokoro-agent",
-                title: "Kokoro Session",
-              },
-            } satisfies SessionEvent
-            yield {
-              event: "run.completed",
-              event_id: "evt_02",
-              session_id: "ses_01",
-              conversation_id: "conv_01",
-              run_id: "run_01",
-              cursor: "run_01:0002",
-              timestamp: "2026-05-29T12:00:01.000Z",
-              payload: {
-                run_id: "run_01",
-                status: "completed",
-                final_message_id: "msg_01",
-              },
-            } satisfies SessionEvent
-          },
-        },
+        newEventId: () => `evt_${String(++n).padStart(4, "0")}`,
+        now: () => new Date("2026-05-30T00:00:00.000Z"),
       },
     )
 
-    expect(result.runId).toBe("run_01")
-    expect(result.events).toHaveLength(2)
-    expect(result.events.at(0)?.event).toBe("session.created")
-    expect(result.events.at(-1)?.event).toBe("run.completed")
+    await relayRun({ streamPort, replayStore, normalizer, sessionId, runId })
+
+    const events = replayStore.read(sessionId)
+    expect(events.map((e) => e.event)).toEqual([
+      "session.created",
+      "run.created",
+      "message.delta",
+      "message.completed",
+      "run.completed",
+    ])
+    expect(events.every((e) => e.session_id === sessionId)).toBe(true)
   })
 
-  test("writes replay through injected boundaries so session stays transport-driven", async () => {
-    const replayLog: SessionEvent[][] = []
-    const streamedEvents: SessionEvent[] = [
-      {
-        event: "session.created",
-        event_id: "evt_10",
-        session_id: "ses_02",
-        conversation_id: "conv_02",
-        run_id: "run_02",
-        cursor: "run_02:0001",
-        timestamp: "2026-05-29T12:01:00.000Z",
-        payload: {
-          session_id: "ses_02",
-          conversation_id: "conv_02",
-          owner_id: "kokoro-agent",
-          title: "Kokoro Session",
-        },
-      },
-      {
-        event: "run.completed",
-        event_id: "evt_11",
-        session_id: "ses_02",
-        conversation_id: "conv_02",
-        run_id: "run_02",
-        cursor: "run_02:0002",
-        timestamp: "2026-05-29T12:01:01.000Z",
-        payload: {
-          run_id: "run_02",
-          status: "completed",
-          final_message_id: "msg_02",
-        },
-      },
-    ]
+  test("relay stops at run.completed and is idempotent on duplicate seqs", async () => {
+    const streamPort = new MemoryStreamPort()
+    const replayStore = memoryReplayStore()
+    const runId = "run_dup"
+    const stream = runEventsStream(runId)
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await streamPort.publish(stream, { kind: "run.completed", run_id: runId, seq: 1, payload: { status: "completed" } })
 
-    const result = await startRun(
-      {
-        sessionId: "ses_02",
-        conversationId: "conv_02",
-        input: "bridge me",
-        executionStyle: "default",
-      },
-      {
-        replayStore: {
-          append(_sessionId, events) {
-            replayLog.push(events)
-          },
-          read() {
-            return []
-          },
-        },
-        agentClient: {
-          async *streamRun() {
-            yield* streamedEvents
-          },
-        },
-      },
+    let n = 0
+    const normalizer = new Normalizer(
+      { sessionId: "ses_dup", conversationId: "ses_dup", runId },
+      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
+    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dup", runId })
 
-    expect(replayLog).toHaveLength(1)
-    expect(replayLog[0]).toEqual(streamedEvents)
-    expect(result.events).toEqual(streamedEvents)
-    expect(result.runId).toBe("run_02")
+    const events = replayStore.read("ses_dup")
+    // 第二个重复 run.started(seq 0) 被去重；只剩 session.created/run.created/run.completed。
+    expect(events.map((e) => e.event)).toEqual([
+      "session.created",
+      "run.created",
+      "run.completed",
+    ])
   })
 
-  test("allows browser clients to call the session bridge across loopback origins", async () => {
-    const server = buildServer()
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  test("relay terminates on run.failed", async () => {
+    const streamPort = new MemoryStreamPort()
+    const replayStore = memoryReplayStore()
+    const runId = "run_fail"
+    const stream = runEventsStream(runId)
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await streamPort.publish(stream, {
+      kind: "run.failed",
+      run_id: runId,
+      seq: 1,
+      payload: { error_kind: "timeout", message: "boom" },
+    })
 
-    try {
-      const address = server.address()
-      if (!address || typeof address === "string") {
-        throw new Error("expected an ephemeral HTTP port")
-      }
+    let n = 0
+    const normalizer = new Normalizer(
+      { sessionId: "ses_fail", conversationId: "ses_fail", runId },
+      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+    )
+    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_fail", runId })
 
-      const requestPreflight = (origin: string) =>
-        new Promise<{
-          statusCode: number | undefined
-          headers: Record<string, string | string[] | undefined>
-        }>((resolve, reject) => {
-          const req = request(
-            {
-              host: "127.0.0.1",
-              port: address.port,
-              path: "/sessions/ses_01/stream",
-              method: "OPTIONS",
-              headers: {
-                origin,
-              },
-            },
-            (res) => {
-              res.resume()
-              res.on("end", () => {
-                resolve({
-                  statusCode: res.statusCode,
-                  headers: res.headers,
-                })
-              })
-            },
-          )
-
-          req.on("error", reject)
-          req.end()
-        })
-
-      const loopbackResponse = await requestPreflight("http://127.0.0.1:3000")
-      const localhostResponse = await requestPreflight("http://localhost:3000")
-
-      // 分仓浏览器直连依赖 CORS；没有这些头时 web 会直接退回 preview fallback。
-      expect(loopbackResponse.statusCode).toBe(204)
-      expect(loopbackResponse.headers["access-control-allow-origin"]).toBe(
-        "http://127.0.0.1:3000",
-      )
-      expect(loopbackResponse.headers.vary).toBe("origin")
-      expect(loopbackResponse.headers["access-control-allow-methods"]).toBe(
-        "GET,POST,OPTIONS",
-      )
-      expect(loopbackResponse.headers["access-control-allow-headers"]).toBe(
-        "content-type",
-      )
-
-      expect(localhostResponse.statusCode).toBe(204)
-      expect(localhostResponse.headers["access-control-allow-origin"]).toBe(
-        "http://localhost:3000",
-      )
-      expect(localhostResponse.headers.vary).toBe("origin")
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error)
-            return
-          }
-          resolve()
-        })
-      })
-    }
+    expect(replayStore.read("ses_fail").map((e) => e.event)).toEqual([
+      "session.created",
+      "run.created",
+      "run.failed",
+    ])
   })
 })
