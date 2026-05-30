@@ -30,6 +30,8 @@ export class Normalizer {
   // thinking 缓冲：累加 thinking.delta 文本，在首个非 thinking 出站事件或 run 收尾时归一成一条 thinking.summary。
   private thinkingBuffer = ""
   private thinkingFlushed = false
+  // write_todos 的 tool_call_ref 集合：其 tool.returned 需被吞掉（已识别为 plan.updated）。
+  private readonly writeTodosRefs = new Set<string>()
 
   constructor(binding: NormalizerBinding, clock: NormalizerClock) {
     this.binding = binding
@@ -136,6 +138,19 @@ export class Normalizer {
         ]
       }
       case "tool.invoked": {
+        if (event.payload.tool_name === "write_todos") {
+          // harness 识别 write_todos → 内部 plan.updated（不产 tool.started，吞掉其工具卡）。
+          // 记住 ref 以便对应 tool.returned 也被吞。
+          this.writeTodosRefs.add(event.payload.tool_call_ref)
+          const args = (event.payload.args ?? {}) as Record<string, unknown>
+          const todos = Array.isArray(args.todos) ? args.todos : []
+          return [
+            this.envelope("plan.updated", {
+              plan_id: `${this.binding.runId}:plan`,
+              todos,
+            }),
+          ]
+        }
         const toolCallId = this.toolCallIdFor(event.payload.tool_call_ref)
         return [
           this.envelope("tool.started", {
@@ -145,6 +160,10 @@ export class Normalizer {
         ]
       }
       case "tool.returned": {
+        if (this.writeTodosRefs.has(event.payload.tool_call_ref)) {
+          // write_todos 已识别为 plan，吞掉其完成事件
+          return []
+        }
         // 找不到配对的 tool.invoked → 忽略并记日志，不崩（边界锁定）。
         const toolCallId = this.toolCallIds.get(event.payload.tool_call_ref)
         if (!toolCallId) {
