@@ -25,12 +25,15 @@ const runFailedPayload = z
   })
   .strict()
 
-// 工具事件按 agent-events v0.2.0：用局部引用 tool_call_ref + tool_name，
+// 工具事件按 agent-events v0.3.0：用局部引用 tool_call_ref + tool_name，
 // session 负责映射成对外稳定 tool_call_id。
+// args 可选：工具入参原样（v0.3.0 新增，additive，向后兼容）；
+// session harness 据此识别 write_todos → plan.updated。
 const toolInvokedPayload = z
   .object({
     tool_call_ref: z.string().min(1),
     tool_name: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
 

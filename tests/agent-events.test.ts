@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, it, test } from "bun:test"
 
 import { agentEventSchema, runRequestSchema } from "../src/domain/agent-events"
 
@@ -179,6 +179,17 @@ describe("agentEventSchema", () => {
         payload: {},
       }),
     ).toThrow()
+  })
+})
+
+describe("agentEventSchema tool.invoked args", () => {
+  it("accepts tool.invoked with optional args", () => {
+    const ev = { kind: "tool.invoked", run_id: "run_1", seq: 4, payload: { tool_call_ref: "c1", tool_name: "write_todos", args: { todos: [{ content: "a", status: "pending" }] } } }
+    expect(agentEventSchema.parse(ev)).toEqual(ev)
+  })
+  it("still accepts tool.invoked without args", () => {
+    const ev = { kind: "tool.invoked", run_id: "run_1", seq: 4, payload: { tool_call_ref: "c1", tool_name: "echo_search" } }
+    expect(agentEventSchema.parse(ev)).toEqual(ev)
   })
 })
 
