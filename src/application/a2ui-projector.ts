@@ -13,6 +13,7 @@ export class A2uiProjector {
   private thinkingCounter = 0
   private readonly messageText = new Map<string, string>()
   private readonly erroredRuns = new Set<string>()
+  private planMounted = false
 
   constructor(surfaceId: string) {
     this.surfaceId = surfaceId
@@ -99,6 +100,24 @@ export class A2uiProjector {
         const path = `/messages/${id}`
         this.messageText.set(id, String(event.payload.content ?? ""))
         return [this.setData(path, String(event.payload.content ?? ""))]
+      }
+      case "plan.updated": {
+        const id = String(event.payload.plan_id)
+        const path = `/plans/${id}`
+        const todos = event.payload.todos
+        if (!Array.isArray(todos) || todos.length === 0) {
+          if (!this.planMounted) return [] // 空且未挂 → 不产
+        }
+        if (!this.planMounted) {
+          this.planMounted = true
+          this.children.push(id)
+          return [
+            this.mountComponent(id, "Plan", { todosPath: { path } }),
+            this.setData(path, todos),
+            this.rootOp(),
+          ]
+        }
+        return [this.setData(path, todos)]
       }
       case "run.completed":
         return []

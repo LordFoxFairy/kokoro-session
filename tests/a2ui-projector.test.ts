@@ -107,4 +107,22 @@ describe("A2uiProjector", () => {
     p.project(ev("run.created", { run_id: "run_1" }, 1))
     expect(p.project(ev("run.completed", { run_id: "run_1", status: "completed" }, 2))).toEqual([])
   })
+
+  it("projects plan.updated into a Plan component mounted once + dataModel replace", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    const first = p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [{ content: "a", status: "pending" }] }, 2))
+    expect(first[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "run_1:plan", component: "Plan", todosPath: { path: "/plans/run_1:plan" } }] } })
+    expect(first[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/plans/run_1:plan", value: [{ content: "a", status: "pending" }] } })
+    expect(first[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["run_1:plan"] }] } })
+    // second plan.updated: dataModel only, no re-mount / no duplicate child
+    const second = p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [{ content: "a", status: "completed" }] }, 3))
+    expect(second).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/plans/run_1:plan", value: [{ content: "a", status: "completed" }] } }])
+  })
+
+  it("plan.updated with empty todos mounts nothing until non-empty", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    expect(p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [] }, 2))).toEqual([])
+  })
 })
