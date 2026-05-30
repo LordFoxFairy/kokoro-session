@@ -1,4 +1,4 @@
-import { createServer, request, type Server } from "node:http"
+import { request } from "node:http"
 
 import { describe, expect, test } from "bun:test"
 
