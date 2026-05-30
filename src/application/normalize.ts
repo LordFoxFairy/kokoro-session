@@ -25,6 +25,11 @@ export class Normalizer {
   private readonly seenSeqs = new Set<number>()
   private readonly messageIds = new Map<string, string>()
   private messageCounter = 0
+  private readonly toolCallIds = new Map<string, string>()
+  private toolCounter = 0
+  // thinking 缓冲：累加 thinking.delta 文本，在首个非 thinking 出站事件或 run 收尾时归一成一条 thinking.summary。
+  private thinkingBuffer = ""
+  private thinkingFlushed = false
 
   constructor(binding: NormalizerBinding, clock: NormalizerClock) {
     this.binding = binding
@@ -47,6 +52,34 @@ export class Normalizer {
   }
 
   private mapEvent(event: AgentEvent): SessionEvent[] {
+    // thinking.delta 只累加缓冲，不直接产出出站事件。
+    if (event.kind === "thinking.delta") {
+      this.thinkingBuffer += event.payload.text
+      return []
+    }
+
+    // 任何非 thinking 出站事件之前，若有挂起的思考缓冲，先归一成一条 thinking.summary。
+    const prefix = this.flushThinking()
+    return [...prefix, ...this.mapNonThinkingEvent(event)]
+  }
+
+  // 把累加的思考文本归一成至多一条 thinking.summary（每 run 仅一次）。无缓冲 / 已 flush 则空。
+  private flushThinking(): SessionEvent[] {
+    if (this.thinkingFlushed || this.thinkingBuffer.length === 0) {
+      return []
+    }
+    this.thinkingFlushed = true
+    const summary = this.thinkingBuffer
+    this.thinkingBuffer = ""
+    return [
+      this.envelope("thinking.summary", {
+        run_id: this.binding.runId,
+        summary,
+      }),
+    ]
+  }
+
+  private mapNonThinkingEvent(event: Exclude<AgentEvent, { kind: "thinking.delta" }>): SessionEvent[] {
     switch (event.kind) {
       case "run.started": {
         const envelopes: SessionEvent[] = []
@@ -102,11 +135,32 @@ export class Normalizer {
           }),
         ]
       }
-      // tool/thinking 归一化在 B2 实现。
-      case "tool.invoked":
-      case "tool.returned":
-      case "thinking.delta":
-        return []
+      case "tool.invoked": {
+        const toolCallId = this.toolCallIdFor(event.payload.tool_call_ref)
+        return [
+          this.envelope("tool.started", {
+            tool_call_id: toolCallId,
+            tool_name: event.payload.tool_name,
+          }),
+        ]
+      }
+      case "tool.returned": {
+        // 找不到配对的 tool.invoked → 忽略并记日志，不崩（边界锁定）。
+        const toolCallId = this.toolCallIds.get(event.payload.tool_call_ref)
+        if (!toolCallId) {
+          console.warn(
+            `tool.returned with no matching tool.invoked (tool_call_ref=${event.payload.tool_call_ref}); ignoring`,
+          )
+          return []
+        }
+        return [
+          this.envelope("tool.completed", {
+            tool_call_id: toolCallId,
+            tool_name: event.payload.tool_name,
+            status: event.payload.status,
+          }),
+        ]
+      }
     }
   }
 
@@ -115,6 +169,15 @@ export class Normalizer {
     if (existing) return existing
     const id = `${this.binding.runId}:msg_${String(++this.messageCounter).padStart(4, "0")}`
     this.messageIds.set(messageRef, id)
+    return id
+  }
+
+  // tool_call_ref → 对外稳定 tool_call_id（同 message_ref 套路），tool.returned 据此配对。
+  private toolCallIdFor(toolCallRef: string): string {
+    const existing = this.toolCallIds.get(toolCallRef)
+    if (existing) return existing
+    const id = `${this.binding.runId}:tool_${String(++this.toolCounter).padStart(4, "0")}`
+    this.toolCallIds.set(toolCallRef, id)
     return id
   }
 
