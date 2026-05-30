@@ -84,14 +84,15 @@ export class MemoryStreamPort implements StreamPort {
 // Redis Streams：xadd 写入（游标=条目 id），xrange 取全量，xread BLOCK 续订。
 export class RedisStreamPort implements StreamPort {
   private readonly redis: Redis
-  private readonly blocking: Redis
+  // 每个 subscribe() 用独立的阻塞连接：XREAD BLOCK 会独占一条连接，多个订阅者
+  // （dispatchRelays / relayRun / 每个 SSE streamSession）共享一条会互相争用、抛错并提前结束，
+  // 导致 SSE 连接被关、浏览器反复重连重放。跟踪存活连接以便 close() 清理。
+  private readonly subscribers = new Set<Redis>()
 
   constructor(url: string) {
     this.redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
-    this.blocking = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
     // 探测连接失败时 ioredis 会发 error 事件；吞掉以免污染测试输出（调用方靠 ping() 抛错判活）。
     this.redis.on("error", () => {})
-    this.blocking.on("error", () => {})
   }
 
   async ping(): Promise<void> {
@@ -119,29 +120,33 @@ export class RedisStreamPort implements StreamPort {
     stream: string,
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
-    await this.ensureConnected(this.blocking)
-    let lastId = fromCursor ?? "0-0"
-    while (true) {
-      const result = await this.blocking.xread(
-        "BLOCK",
-        1000,
-        "STREAMS",
-        stream,
-        lastId,
-      )
-      if (!result) continue
-      for (const [, entries] of result) {
-        for (const [cursor, fields] of entries) {
-          lastId = cursor
-          yield { cursor, event: decodeFields(fields) }
+    // 专用连接：避免与其它订阅者在同一连接上争用阻塞 XREAD。迭代结束（return/throw）时 finally 释放。
+    const conn = this.redis.duplicate()
+    conn.on("error", () => {})
+    this.subscribers.add(conn)
+    try {
+      await this.ensureConnected(conn)
+      let lastId = fromCursor ?? "0-0"
+      while (true) {
+        const result = await conn.xread("BLOCK", 1000, "STREAMS", stream, lastId)
+        if (!result) continue
+        for (const [, entries] of result) {
+          for (const [cursor, fields] of entries) {
+            lastId = cursor
+            yield { cursor, event: decodeFields(fields) }
+          }
         }
       }
+    } finally {
+      this.subscribers.delete(conn)
+      conn.disconnect()
     }
   }
 
   async close(): Promise<void> {
     this.redis.disconnect()
-    this.blocking.disconnect()
+    for (const conn of this.subscribers) conn.disconnect()
+    this.subscribers.clear()
   }
 
   private async ensureConnected(client: Redis): Promise<void> {

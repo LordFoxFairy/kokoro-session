@@ -4,7 +4,7 @@ import { startRun } from "../application/start_run"
 import { A2uiProjector } from "../application/a2ui-projector"
 import { parseSessionEvent, type SessionEvent } from "../domain/events"
 import type { ReplayStore } from "../infrastructure/replay_store"
-import { readReplaySnapshot, replayStream } from "../infrastructure/replay_store"
+import { replayStream } from "../infrastructure/replay_store"
 import type { StreamPort } from "../infrastructure/stream-port"
 import { toA2uiSseChunk } from "../infrastructure/sse"
 
@@ -132,20 +132,23 @@ async function streamSession(
     })
   }
 
-  const snapshot = await readReplaySnapshot(dependencies.streamPort, sessionId)
-  let lastCursor = ""
-  for (const event of snapshot) {
-    writeEvent(event)
-    lastCursor = event.cursor
+  // 用 readAll 拿快照：StreamItem.cursor 是后端原生流位置（redis 流 ID / 内存序号），
+  // 续订必须用它，而不是 SessionEvent.cursor（归一化游标 run_id:NNNN）——后者非法会让
+  // redis XREAD 抛错、提前结束 SSE，导致浏览器反复重连重放。
+  const stream = replayStream(sessionId)
+  const snapshot = await dependencies.streamPort.readAll(stream)
+  let lastStreamId: string | undefined = undefined
+  for (const item of snapshot) {
+    writeEvent(parseSessionEvent(item.event))
+    lastStreamId = item.cursor
   }
 
-  const stream = replayStream(sessionId)
   let aborted = false
   req.on("close", () => {
     aborted = true
   })
 
-  for await (const item of dependencies.streamPort.subscribe(stream, lastCursor)) {
+  for await (const item of dependencies.streamPort.subscribe(stream, lastStreamId)) {
     if (aborted) break
     writeEvent(parseSessionEvent(item.event))
   }

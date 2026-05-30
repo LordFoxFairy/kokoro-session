@@ -101,7 +101,79 @@ describe("GET /sessions/:id/stream", () => {
     // SSE 三行结构：id / event / data。
     expect(text).toMatch(/id: [^\n]+\nevent: a2ui\.op\ndata: \{/)
   })
+
+  // 回归：连接后才追加的事件，必须经实时 tail 送达。
+  // 旧实现把 SessionEvent.cursor（归一化游标 run_id:NNNN）当成流位置传给 subscribe，
+  // 与后端原生游标命名空间不符——内存后端会把后续事件过滤掉、redis 会 XREAD 抛错关连接，
+  // 导致只能靠"重连+全量重放"凑活。此用例在非空快照后追加事件，断言它们活体送达。
+  test("delivers live ops appended AFTER the client connects (cursor resume regression)", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const sessionId = "ses_live"
+    const runId = "run_live"
+    let n = 0
+    const normalizer = new Normalizer(
+      { sessionId, conversationId: sessionId, runId },
+      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+    )
+    const append = async (raw: unknown): Promise<void> => {
+      const envs = normalizer.ingest(raw)
+      if (envs.length) await deps.replayStore.append(sessionId, envs)
+    }
+
+    // Phase 1：先归一化一批，使客户端连接时快照非空（last 游标为归一化的 run_live:NNNN）。
+    await append({ kind: "run.started", run_id: runId, seq: 0, payload: {} })
+
+    // 客户端连接（快照里已有 createSurface + Thread）。
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(3000),
+    })
+    const reading = readUntil(res, "LIVE-OK")
+
+    // Phase 2：连接之后才追加的事件——必须经实时 tail 送达（旧实现会丢/断）。
+    await append({
+      kind: "text.delta",
+      run_id: runId,
+      seq: 1,
+      payload: { message_ref: "m1", text: "LIVE-OK" },
+    })
+    await append({
+      kind: "run.completed",
+      run_id: runId,
+      seq: 2,
+      payload: { status: "completed" },
+    })
+
+    const text = await reading
+    // 连接后追加的文本经 updateDataModel 活体送达。
+    expect(text).toContain("LIVE-OK")
+    expect(text).toContain("updateDataModel")
+  })
 })
+
+// 读到出现哨兵串即返回（活体送达验证），带兜底防止挂死。
+async function readUntil(res: Response, sentinel: string): Promise<string> {
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error("no body")
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      if (buffer.includes(sentinel)) {
+        await reader.cancel()
+        break
+      }
+    }
+  } catch {
+    // AbortSignal 超时——返回已收到的内容，让断言给出有意义的失败。
+  }
+  return buffer
+}
 
 // 读到包含 updateDataModel 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
 async function readSomeSse(res: Response): Promise<string> {
