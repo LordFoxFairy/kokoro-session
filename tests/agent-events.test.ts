@@ -102,6 +102,84 @@ describe("agentEventSchema", () => {
       }),
     ).toThrow()
   })
+
+  test("accepts tool.invoked with tool_call_ref + tool_name", () => {
+    const parsed = agentEventSchema.parse({
+      kind: "tool.invoked",
+      run_id: "run_01",
+      seq: 3,
+      payload: { tool_call_ref: "tc1", tool_name: "echo_search" },
+    })
+    if (parsed.kind !== "tool.invoked") throw new Error("narrowing failed")
+    expect(parsed.payload.tool_call_ref).toBe("tc1")
+    expect(parsed.payload.tool_name).toBe("echo_search")
+  })
+
+  test("accepts tool.returned with tool_call_ref + tool_name + status", () => {
+    const parsed = agentEventSchema.parse({
+      kind: "tool.returned",
+      run_id: "run_01",
+      seq: 4,
+      payload: { tool_call_ref: "tc1", tool_name: "echo_search", status: "ok" },
+    })
+    if (parsed.kind !== "tool.returned") throw new Error("narrowing failed")
+    expect(parsed.payload.status).toBe("ok")
+  })
+
+  test("accepts thinking.delta with text", () => {
+    const parsed = agentEventSchema.parse({
+      kind: "thinking.delta",
+      run_id: "run_01",
+      seq: 5,
+      payload: { text: "reasoning" },
+    })
+    if (parsed.kind !== "thinking.delta") throw new Error("narrowing failed")
+    expect(parsed.payload.text).toBe("reasoning")
+  })
+
+  test("rejects tool.invoked missing tool_name", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        kind: "tool.invoked",
+        run_id: "run_01",
+        seq: 3,
+        payload: { tool_call_ref: "tc1" },
+      }),
+    ).toThrow()
+  })
+
+  test("rejects tool.returned missing status", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        kind: "tool.returned",
+        run_id: "run_01",
+        seq: 4,
+        payload: { tool_call_ref: "tc1", tool_name: "echo_search" },
+      }),
+    ).toThrow()
+  })
+
+  test("rejects extra keys inside tool.invoked payload (strict)", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        kind: "tool.invoked",
+        run_id: "run_01",
+        seq: 3,
+        payload: { tool_call_ref: "tc1", tool_name: "echo_search", smuggled: 1 },
+      }),
+    ).toThrow()
+  })
+
+  test("rejects thinking.delta missing text", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        kind: "thinking.delta",
+        run_id: "run_01",
+        seq: 5,
+        payload: {},
+      }),
+    ).toThrow()
+  })
 })
 
 describe("runRequestSchema", () => {

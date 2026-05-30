@@ -148,4 +148,111 @@ describe("Normalizer", () => {
       n.ingest({ kind: "bogus", run_id: "run_x", seq: 1, payload: {} }),
     ).toThrow()
   })
+
+  test("tool.invoked → tool.started with stable tool_call_id; tool.returned → tool.completed reusing it", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const started = n.ingest({
+      kind: "tool.invoked",
+      run_id: "run_x",
+      seq: 1,
+      payload: { tool_call_ref: "tc1", tool_name: "echo_search" },
+    })
+    const completed = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 2,
+      payload: { tool_call_ref: "tc1", tool_name: "echo_search", status: "ok" },
+    })
+
+    expect(started).toHaveLength(1)
+    expect(started[0]?.event).toBe("tool.started")
+    expect(started[0]?.payload).toMatchObject({ tool_name: "echo_search" })
+    const tcid = started[0]?.payload.tool_call_id
+    expect(typeof tcid).toBe("string")
+
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.event).toBe("tool.completed")
+    expect(completed[0]?.payload).toMatchObject({
+      tool_call_id: tcid,
+      tool_name: "echo_search",
+      status: "ok",
+    })
+    for (const e of [...started, ...completed]) {
+      expect(() => parseSessionEvent(e)).not.toThrow()
+    }
+  })
+
+  test("tool.returned with no matching tool.invoked is ignored (logged), does not crash", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 1,
+      payload: { tool_call_ref: "ghost", tool_name: "echo_search", status: "ok" },
+    })
+    expect(out).toEqual([])
+  })
+
+  test("thinking deltas accumulate into ONE thinking.summary at run.completed", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const d1 = n.ingest({ kind: "thinking.delta", run_id: "run_x", seq: 1, payload: { text: "step a " } })
+    const d2 = n.ingest({ kind: "thinking.delta", run_id: "run_x", seq: 2, payload: { text: "step b" } })
+    // 原始思考增量本身不外泄成出站事件。
+    expect(d1).toEqual([])
+    expect(d2).toEqual([])
+
+    const done = n.ingest({ kind: "run.completed", run_id: "run_x", seq: 3, payload: { status: "completed" } })
+    const summaries = done.filter((e) => e.event === "thinking.summary")
+    expect(summaries).toHaveLength(1)
+    expect(summaries[0]?.payload).toMatchObject({ run_id: "run_x", summary: "step a step b" })
+    // summary 在 run.completed 之前（思考块先于收尾）。
+    expect(done.map((e) => e.event)).toEqual(["thinking.summary", "run.completed"])
+    for (const e of done) expect(() => parseSessionEvent(e)).not.toThrow()
+  })
+
+  test("thinking.summary flushes on first non-thinking event after thinking (before text)", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    n.ingest({ kind: "thinking.delta", run_id: "run_x", seq: 1, payload: { text: "reasoning" } })
+    const out = n.ingest({
+      kind: "text.delta",
+      run_id: "run_x",
+      seq: 2,
+      payload: { message_ref: "m1", text: "Answer" },
+    })
+    expect(out.map((e) => e.event)).toEqual(["thinking.summary", "message.delta"])
+    const summary = out.find((e) => e.event === "thinking.summary")
+    expect(summary?.payload).toMatchObject({ summary: "reasoning" })
+  })
+
+  test("thinking.summary emitted at most once per run", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    n.ingest({ kind: "thinking.delta", run_id: "run_x", seq: 1, payload: { text: "x" } })
+    const t1 = n.ingest({ kind: "text.delta", run_id: "run_x", seq: 2, payload: { message_ref: "m1", text: "A" } })
+    const t2 = n.ingest({ kind: "text.delta", run_id: "run_x", seq: 3, payload: { message_ref: "m1", text: "B" } })
+    const done = n.ingest({ kind: "run.completed", run_id: "run_x", seq: 4, payload: { status: "completed" } })
+    expect(t1.filter((e) => e.event === "thinking.summary")).toHaveLength(1)
+    expect(t2.filter((e) => e.event === "thinking.summary")).toHaveLength(0)
+    expect(done.filter((e) => e.event === "thinking.summary")).toHaveLength(0)
+  })
+
+  test("no thinking deltas → no thinking.summary at run.completed", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const done = n.ingest({ kind: "run.completed", run_id: "run_x", seq: 1, payload: { status: "completed" } })
+    expect(done.map((e) => e.event)).toEqual(["run.completed"])
+  })
+
+  test("idempotent: repeated tool.invoked (same seq) does not double-emit or remap id", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const a = n.ingest({ kind: "tool.invoked", run_id: "run_x", seq: 1, payload: { tool_call_ref: "tc1", tool_name: "t" } })
+    const b = n.ingest({ kind: "tool.invoked", run_id: "run_x", seq: 1, payload: { tool_call_ref: "tc1", tool_name: "t" } })
+    expect(a).toHaveLength(1)
+    expect(b).toEqual([])
+  })
 })

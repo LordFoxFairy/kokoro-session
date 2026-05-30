@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
 import { startRun } from "../application/start_run"
-import { parseSessionEvent } from "../domain/events"
+import { A2uiProjector } from "../application/a2ui-projector"
+import { parseSessionEvent, type SessionEvent } from "../domain/events"
 import type { ReplayStore } from "../infrastructure/replay_store"
-import { readReplaySnapshot, replayStream } from "../infrastructure/replay_store"
+import { replayStream } from "../infrastructure/replay_store"
 import type { StreamPort } from "../infrastructure/stream-port"
-import { toSseChunk } from "../infrastructure/sse"
+import { toA2uiSseChunk } from "../infrastructure/sse"
 
 const allowedBrowserOrigins = new Set([
   process.env.KOKORO_WEB_ORIGIN ?? "http://127.0.0.1:3000",
@@ -111,7 +112,7 @@ async function handle(
   res.end("not found")
 }
 
-// 先回放快照，再从末游标续订（SSE）。断连时清理订阅，避免泄漏。
+// 先回放快照，再从末游标续订（SSE）。每个连接独立 projector 把 SessionEvent 投影成 A2UI op。
 async function streamSession(
   req: IncomingMessage,
   res: ServerResponse,
@@ -124,22 +125,32 @@ async function streamSession(
     connection: "keep-alive",
   })
 
-  const snapshot = await readReplaySnapshot(dependencies.streamPort, sessionId)
-  let lastCursor = ""
-  for (const event of snapshot) {
-    res.write(toSseChunk(event))
-    lastCursor = event.cursor
+  const projector = new A2uiProjector(sessionId)
+  const writeEvent = (event: SessionEvent): void => {
+    projector.project(event).forEach((op, i) => {
+      res.write(toA2uiSseChunk(op, `${event.cursor}:${i}`))
+    })
   }
 
+  // 用 readAll 拿快照：StreamItem.cursor 是后端原生流位置（redis 流 ID / 内存序号），
+  // 续订必须用它，而不是 SessionEvent.cursor（归一化游标 run_id:NNNN）——后者非法会让
+  // redis XREAD 抛错、提前结束 SSE，导致浏览器反复重连重放。
   const stream = replayStream(sessionId)
+  const snapshot = await dependencies.streamPort.readAll(stream)
+  let lastStreamId: string | undefined = undefined
+  for (const item of snapshot) {
+    writeEvent(parseSessionEvent(item.event))
+    lastStreamId = item.cursor
+  }
+
   let aborted = false
   req.on("close", () => {
     aborted = true
   })
 
-  for await (const item of dependencies.streamPort.subscribe(stream, lastCursor)) {
+  for await (const item of dependencies.streamPort.subscribe(stream, lastStreamId)) {
     if (aborted) break
-    res.write(toSseChunk(parseSessionEvent(item.event)))
+    writeEvent(parseSessionEvent(item.event))
   }
   res.end()
 }

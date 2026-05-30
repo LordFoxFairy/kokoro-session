@@ -3,6 +3,9 @@ const sessionEventNames = [
   "run.created",
   "message.delta",
   "message.completed",
+  "thinking.summary",
+  "tool.started",
+  "tool.completed",
   "run.completed",
   "run.failed",
 ] as const
