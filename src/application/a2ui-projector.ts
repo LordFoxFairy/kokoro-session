@@ -13,6 +13,8 @@ export class A2uiProjector {
   private thinkingCounter = 0
   private readonly messageText = new Map<string, string>()
   private readonly erroredRuns = new Set<string>()
+  // 假设：每个 run 至多一个 plan，id 稳定为 `{run_id}:plan`（见 normalize 的 plan.updated）。
+  // 若未来新增第二种 plan 类型，这个单 boolean 会静默抑制其挂载——届时需改为按 id 分轨。
   private planMounted = false
 
   constructor(surfaceId: string) {
@@ -117,6 +119,7 @@ export class A2uiProjector {
             this.rootOp(),
           ]
         }
+        // mounted + empty todos → fall through to setData (clears the plan)
         return [this.setData(path, todos)]
       }
       case "run.completed":

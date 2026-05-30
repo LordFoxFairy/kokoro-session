@@ -283,4 +283,15 @@ describe("Normalizer — write_todos harness recognition", () => {
     const inv = norm.ingest({ kind: "tool.invoked", run_id: "run_1", seq: 2, payload: { tool_call_ref: "es1", tool_name: "echo_search", args: { query: "x" } } })
     expect(inv.some((e) => e.event === "tool.started")).toBe(true)
   })
+
+  it("write_todos with NO args field → plan.updated with empty todos (?? {} fallback)", () => {
+    const norm = new Normalizer({ sessionId: "s", conversationId: "c", runId: "run_1" }, clock())
+    norm.ingest({ kind: "run.started", run_id: "run_1", seq: 1, payload: {} })
+    const out = norm.ingest({ kind: "tool.invoked", run_id: "run_1", seq: 2, payload: { tool_call_ref: "wt1", tool_name: "write_todos" } })
+    const plan = out.find((e) => e.event === "plan.updated")
+    expect(plan).toBeDefined()
+    expect(plan!.payload.plan_id).toBe("run_1:plan")
+    expect(plan!.payload.todos).toEqual([])
+    expect(out.some((e) => e.event === "tool.started")).toBe(false)
+  })
 })

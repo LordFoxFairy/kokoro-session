@@ -125,4 +125,12 @@ describe("A2uiProjector", () => {
     p.project(ev("run.created", { run_id: "run_1" }, 1))
     expect(p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [] }, 2))).toEqual([])
   })
+
+  it("plan.updated with empty todos after mount clears the plan (dataModel only, no re-mount)", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [{ content: "a", status: "pending" }] }, 2))
+    const cleared = p.project(ev("plan.updated", { plan_id: "run_1:plan", todos: [] }, 3))
+    expect(cleared).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/plans/run_1:plan", value: [] } }])
+  })
 })

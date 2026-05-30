@@ -142,8 +142,8 @@ export class Normalizer {
           // harness 识别 write_todos → 内部 plan.updated（不产 tool.started，吞掉其工具卡）。
           // 记住 ref 以便对应 tool.returned 也被吞。
           this.writeTodosRefs.add(event.payload.tool_call_ref)
-          const args = (event.payload.args ?? {}) as Record<string, unknown>
-          const todos = Array.isArray(args.todos) ? args.todos : []
+          const rawArgs = event.payload.args ?? {}
+          const todos = "todos" in rawArgs && Array.isArray(rawArgs.todos) ? rawArgs.todos : []
           return [
             this.envelope("plan.updated", {
               plan_id: `${this.binding.runId}:plan`,
