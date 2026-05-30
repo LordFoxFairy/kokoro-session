@@ -1,7 +1,10 @@
+import { createServer, request, type Server } from "node:http"
+
 import { describe, expect, test } from "bun:test"
 
-import type { SessionEvent } from "../src/domain/events"
 import { startRun } from "../src/application/start_run"
+import type { SessionEvent } from "../src/domain/events"
+import { buildServer } from "../src/interfaces/http"
 
 describe("startRun", () => {
   test("collects replayable agent events and returns the run id", async () => {
@@ -123,5 +126,79 @@ describe("startRun", () => {
     expect(replayLog[0]).toEqual(streamedEvents)
     expect(result.events).toEqual(streamedEvents)
     expect(result.runId).toBe("run_02")
+  })
+
+  test("allows browser clients to call the session bridge across loopback origins", async () => {
+    const server = buildServer()
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+
+    try {
+      const address = server.address()
+      if (!address || typeof address === "string") {
+        throw new Error("expected an ephemeral HTTP port")
+      }
+
+      const requestPreflight = (origin: string) =>
+        new Promise<{
+          statusCode: number | undefined
+          headers: Record<string, string | string[] | undefined>
+        }>((resolve, reject) => {
+          const req = request(
+            {
+              host: "127.0.0.1",
+              port: address.port,
+              path: "/sessions/ses_01/stream",
+              method: "OPTIONS",
+              headers: {
+                origin,
+              },
+            },
+            (res) => {
+              res.resume()
+              res.on("end", () => {
+                resolve({
+                  statusCode: res.statusCode,
+                  headers: res.headers,
+                })
+              })
+            },
+          )
+
+          req.on("error", reject)
+          req.end()
+        })
+
+      const loopbackResponse = await requestPreflight("http://127.0.0.1:3000")
+      const localhostResponse = await requestPreflight("http://localhost:3000")
+
+      // 分仓浏览器直连依赖 CORS；没有这些头时 web 会直接退回 preview fallback。
+      expect(loopbackResponse.statusCode).toBe(204)
+      expect(loopbackResponse.headers["access-control-allow-origin"]).toBe(
+        "http://127.0.0.1:3000",
+      )
+      expect(loopbackResponse.headers.vary).toBe("origin")
+      expect(loopbackResponse.headers["access-control-allow-methods"]).toBe(
+        "GET,POST,OPTIONS",
+      )
+      expect(loopbackResponse.headers["access-control-allow-headers"]).toBe(
+        "content-type",
+      )
+
+      expect(localhostResponse.statusCode).toBe(204)
+      expect(localhostResponse.headers["access-control-allow-origin"]).toBe(
+        "http://localhost:3000",
+      )
+      expect(localhostResponse.headers.vary).toBe("origin")
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error)
+            return
+          }
+          resolve()
+        })
+      })
+    }
   })
 })

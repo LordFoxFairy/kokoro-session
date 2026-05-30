@@ -5,6 +5,37 @@ import { startRun } from "../application/start_run"
 import { memoryReplayStore } from "../infrastructure/replay_store"
 import { toSseChunk } from "../infrastructure/sse"
 
+const allowedBrowserOrigins = new Set([
+  process.env.KOKORO_WEB_ORIGIN ?? "http://127.0.0.1:3000",
+  "http://localhost:3000",
+])
+
+function applyBrowserHeaders(
+  req: Parameters<typeof createServer>[0] extends (
+    req: infer Request,
+    res: unknown,
+  ) => unknown
+    ? Request
+    : never,
+  res: Parameters<typeof createServer>[0] extends (
+    req: unknown,
+    res: infer Response,
+  ) => unknown
+    ? Response
+    : never,
+) {
+  // 开发态只显式放通本地 web 源，避免把 session 端口无界暴露给其它来源。
+  const requestOrigin = req.headers.origin
+
+  if (requestOrigin && allowedBrowserOrigins.has(requestOrigin)) {
+    res.setHeader("access-control-allow-origin", requestOrigin)
+    res.setHeader("vary", "origin")
+  }
+
+  res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS")
+  res.setHeader("access-control-allow-headers", "content-type")
+}
+
 export type BuildServerDependencies = {
   replayStore: SessionReplayStore
 }
@@ -30,6 +61,14 @@ export function buildServer(
   dependencies: BuildServerDependencies = defaultDependencies,
 ) {
   return createServer(async (req, res) => {
+    applyBrowserHeaders(req, res)
+
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204
+      res.end()
+      return
+    }
+
     if (!req.url) {
       res.statusCode = 400
       res.end("missing url")

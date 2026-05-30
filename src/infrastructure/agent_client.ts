@@ -41,7 +41,14 @@ async function* readEventStream(response: Response): AsyncIterable<SessionEvent>
       }
 
       const payload = JSON.parse(dataLine.slice(6)) as unknown
-      yield parseSessionEvent(payload)
+      const event = parseSessionEvent(payload)
+
+      yield event
+
+      // agent 侧当前按单次 run 输出有限事件流；遇到终态后主动收束，避免 session 一直挂等连接关闭。
+      if (event.event === "run.completed" || event.event === "run.failed") {
+        return
+      }
     }
   }
 }
