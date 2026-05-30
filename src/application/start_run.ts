@@ -1,35 +1,74 @@
-import type { SessionEvent } from "../domain/events"
-import type { StartRunInput } from "../domain/sessions"
-import type { AgentRunStreamClient, SessionReplayStore } from "./ports"
-import { createAgentRunStreamClient } from "../infrastructure/agent_client"
-import { memoryReplayStore } from "../infrastructure/replay_store"
+import { runRequestSchema } from "../domain/agent-events"
+import type { ReplayStore } from "../infrastructure/replay_store"
+import type { StreamPort } from "../infrastructure/stream-port"
+import type { RunIdFactory } from "./ports"
+import type { Normalizer } from "./normalize"
 
-export type StartRunDependencies = {
-  replayStore: SessionReplayStore
-  agentClient: AgentRunStreamClient
+// session 不再 HTTP 同步调 agent：生成 run_id，把合法 run.request 发到请求流，
+// agent worker 消费后把原始事件回写到 run 事件流，由 relayRun 归一化进 replay。
+
+export const REQUESTS_STREAM = "kokoro:runs:requests"
+
+export function runEventsStream(runId: string): string {
+  return `kokoro:run:${runId}:events`
 }
 
-const defaultDependencies: StartRunDependencies = {
-  replayStore: memoryReplayStore,
-  agentClient: createAgentRunStreamClient({
-    baseUrl: process.env.KOKORO_AGENT_BASE_URL ?? "http://127.0.0.1:8001",
-  }),
+export type StartRunInput = {
+  sessionId: string
+  conversationId?: string
+  input: string
+  executionStyle?: string
+}
+
+export type StartRunDependencies = {
+  streamPort: StreamPort
+  newRunId?: RunIdFactory
+}
+
+function defaultRunId(): string {
+  return `run_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`
 }
 
 export async function startRun(
   input: StartRunInput,
-  dependencies: StartRunDependencies = defaultDependencies,
-) {
-  const events: SessionEvent[] = []
+  dependencies: StartRunDependencies,
+): Promise<{ runId: string }> {
+  const runId = (dependencies.newRunId ?? defaultRunId)()
+  const conversationId = input.conversationId ?? input.sessionId
 
-  for await (const event of dependencies.agentClient.streamRun(input)) {
-    events.push(event)
-  }
+  // 出站请求前先过严格 schema：拒绝空 input / 多余键，绝不把脏请求写进流。
+  const request = runRequestSchema.parse({
+    kind: "run.request",
+    run_id: runId,
+    session_id: input.sessionId,
+    conversation_id: conversationId,
+    input: input.input,
+    ...(input.executionStyle ? { execution_style: input.executionStyle } : {}),
+  })
 
-  dependencies.replayStore.append(input.sessionId, events)
+  await dependencies.streamPort.publish(REQUESTS_STREAM, request)
+  return { runId }
+}
 
-  return {
-    runId: events.at(0)?.run_id ?? "",
-    events,
+export type RelayRunInput = {
+  streamPort: StreamPort
+  replayStore: ReplayStore
+  normalizer: Normalizer
+  sessionId: string
+  runId: string
+}
+
+// 消费某 run 的事件流 → 归一化 → 追加 replay。遇到终态（run.completed/run.failed）收束，
+// 避免连接一直挂等。重复 seq 由 normalizer 去重，断连/空流不崩。
+export async function relayRun(input: RelayRunInput): Promise<void> {
+  const stream = runEventsStream(input.runId)
+  for await (const item of input.streamPort.subscribe(stream)) {
+    const envelopes = input.normalizer.ingest(item.event)
+    if (envelopes.length > 0) {
+      await input.replayStore.append(input.sessionId, envelopes)
+    }
+    if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
+      return
+    }
   }
 }
