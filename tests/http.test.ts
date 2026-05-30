@@ -51,7 +51,7 @@ describe("POST /sessions/:id/runs", () => {
 })
 
 describe("GET /sessions/:id/stream", () => {
-  test("replays normalized AGUI events as SSE after relay drains", async () => {
+  test("replays A2UI ops as SSE after relay drains", async () => {
     const deps = makeDeps()
     await listen(deps)
 
@@ -91,16 +91,17 @@ describe("GET /sessions/:id/stream", () => {
     expect(res.headers.get("content-type")).toContain("text/event-stream")
 
     const text = await readSomeSse(res)
-    expect(text).toContain("event: session.created")
-    expect(text).toContain("event: run.created")
-    expect(text).toContain("event: message.delta")
-    expect(text).toContain("event: run.completed")
+    // stream 现在产出 A2UI op（event: a2ui.op），不再是 AGUI 信封。
+    expect(text).toContain("event: a2ui.op")
+    expect(text).toContain("createSurface")
+    expect(text).toContain("kokoro/chat/v1")
+    expect(text).toContain("updateComponents")
     // SSE 三行结构：id / event / data。
-    expect(text).toMatch(/id: run_[^\n]*\nevent: session\.created\ndata: \{/)
+    expect(text).toMatch(/id: [^\n]+\nevent: a2ui\.op\ndata: \{/)
   })
 })
 
-// 读到包含 run.completed 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
+// 读到包含 createSurface 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
 async function readSomeSse(res: Response): Promise<string> {
   const reader = res.body?.getReader()
   if (!reader) throw new Error("no body")
@@ -110,7 +111,7 @@ async function readSomeSse(res: Response): Promise<string> {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    if (buffer.includes("event: run.completed")) {
+    if (buffer.includes("createSurface")) {
       await reader.cancel()
       break
     }

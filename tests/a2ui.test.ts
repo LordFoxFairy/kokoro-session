@@ -3,12 +3,12 @@ import { a2uiOpSchema, type A2uiOp } from "../src/domain/a2ui"
 
 describe("a2uiOpSchema", () => {
   it("accepts createSurface", () => {
-    const op = { version: "v0.9", createSurface: { surfaceId: "ses_1", catalogId: "kokoro/chat/v1" } }
+    const op: A2uiOp = { version: "v0.9", createSurface: { surfaceId: "ses_1", catalogId: "kokoro/chat/v1" } }
     expect(a2uiOpSchema.parse(op)).toEqual(op)
   })
 
   it("accepts updateComponents with passthrough component props", () => {
-    const op = {
+    const op: A2uiOp = {
       version: "v0.9",
       updateComponents: {
         surfaceId: "ses_1",
@@ -19,7 +19,7 @@ describe("a2uiOpSchema", () => {
   })
 
   it("accepts updateDataModel", () => {
-    const op = { version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/messages/m_1", value: "hi" } }
+    const op: A2uiOp = { version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/messages/m_1", value: "hi" } }
     expect(a2uiOpSchema.parse(op)).toEqual(op)
   })
 

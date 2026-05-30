@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
 import { startRun } from "../application/start_run"
-import { parseSessionEvent } from "../domain/events"
+import { A2uiProjector } from "../application/a2ui-projector"
+import { parseSessionEvent, type SessionEvent } from "../domain/events"
 import type { ReplayStore } from "../infrastructure/replay_store"
 import { readReplaySnapshot, replayStream } from "../infrastructure/replay_store"
 import type { StreamPort } from "../infrastructure/stream-port"
-import { toSseChunk } from "../infrastructure/sse"
+import { toA2uiSseChunk } from "../infrastructure/sse"
 
 const allowedBrowserOrigins = new Set([
   process.env.KOKORO_WEB_ORIGIN ?? "http://127.0.0.1:3000",
@@ -111,7 +112,7 @@ async function handle(
   res.end("not found")
 }
 
-// 先回放快照，再从末游标续订（SSE）。断连时清理订阅，避免泄漏。
+// 先回放快照，再从末游标续订（SSE）。每个连接独立 projector 把 SessionEvent 投影成 A2UI op。
 async function streamSession(
   req: IncomingMessage,
   res: ServerResponse,
@@ -124,10 +125,18 @@ async function streamSession(
     connection: "keep-alive",
   })
 
+  // 每个连接独立 projector：把有序 SessionEvent 投影成 A2UI op，先重放快照再续订。
+  const projector = new A2uiProjector(sessionId)
+  const writeEvent = (event: SessionEvent, opSeqBase: number): void => {
+    projector.project(event).forEach((op, i) => {
+      res.write(toA2uiSseChunk(op, `${event.cursor}:${opSeqBase + i}`))
+    })
+  }
+
   const snapshot = await readReplaySnapshot(dependencies.streamPort, sessionId)
   let lastCursor = ""
   for (const event of snapshot) {
-    res.write(toSseChunk(event))
+    writeEvent(event, 0)
     lastCursor = event.cursor
   }
 
@@ -139,7 +148,7 @@ async function streamSession(
 
   for await (const item of dependencies.streamPort.subscribe(stream, lastCursor)) {
     if (aborted) break
-    res.write(toSseChunk(parseSessionEvent(item.event)))
+    writeEvent(parseSessionEvent(item.event), 0)
   }
   res.end()
 }

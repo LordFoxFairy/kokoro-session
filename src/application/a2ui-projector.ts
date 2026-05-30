@@ -1,5 +1,5 @@
 import type { SessionEvent } from "../domain/events"
-import { a2uiOpSchema, type A2uiOp } from "../domain/a2ui"
+import { a2uiOpSchema, type A2uiOp, type A2uiComponent } from "../domain/a2ui"
 
 const CATALOG_ID = "kokoro/chat/v1"
 
@@ -31,8 +31,9 @@ export class A2uiProjector {
     }
   }
 
-  private mountComponent(component: Record<string, unknown>): A2uiOp {
-    return { version: "v0.9", updateComponents: { surfaceId: this.surfaceId, components: [component] } }
+  private mountComponent(id: string, component: string, extra: Record<string, unknown>): A2uiOp {
+    const comp = { id, component, ...extra } as A2uiComponent
+    return { version: "v0.9", updateComponents: { surfaceId: this.surfaceId, components: [comp] } }
   }
 
   private setData(path: string, value: unknown): A2uiOp {
@@ -56,7 +57,7 @@ export class A2uiProjector {
         const path = `/thinking/${id}`
         this.children.push(id)
         return [
-          this.mountComponent({ id, component: "ThinkingBlock", summary: { path } }),
+          this.mountComponent(id, "ThinkingBlock", { summary: { path } }),
           this.setData(path, String(event.payload.summary ?? "")),
           this.rootOp(),
         ]
@@ -65,14 +66,14 @@ export class A2uiProjector {
         const id = String(event.payload.tool_call_id)
         this.children.push(id)
         return [
-          this.mountComponent({ id, component: "ToolCard", toolName: String(event.payload.tool_name), status: "running" }),
+          this.mountComponent(id, "ToolCard", { toolName: String(event.payload.tool_name), status: "running" }),
           this.rootOp(),
         ]
       }
       case "tool.completed": {
         const id = String(event.payload.tool_call_id)
         return [
-          this.mountComponent({ id, component: "ToolCard", toolName: String(event.payload.tool_name), status: String(event.payload.status) }),
+          this.mountComponent(id, "ToolCard", { toolName: String(event.payload.tool_name), status: String(event.payload.status) }),
         ]
       }
       case "message.delta": {
@@ -84,7 +85,7 @@ export class A2uiProjector {
         if (prev === undefined) {
           this.children.push(id)
           return [
-            this.mountComponent({ id, component: "Message", author: "ai", text: { path } }),
+            this.mountComponent(id, "Message", { author: "ai", text: { path } }),
             this.setData(path, next),
             this.rootOp(),
           ]
@@ -104,7 +105,7 @@ export class A2uiProjector {
         const path = `/messages/${id}`
         this.children.push(id)
         return [
-          this.mountComponent({ id, component: "Message", author: "ai", text: { path } }),
+          this.mountComponent(id, "Message", { author: "ai", text: { path } }),
           this.setData(path, `⚠️ ${String(event.payload.message ?? "")}`),
           this.rootOp(),
         ]
