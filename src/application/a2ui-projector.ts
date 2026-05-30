@@ -12,6 +12,7 @@ export class A2uiProjector {
   private readonly children: string[] = []
   private thinkingCounter = 0
   private readonly messageText = new Map<string, string>()
+  private readonly erroredRuns = new Set<string>()
 
   constructor(surfaceId: string) {
     this.surfaceId = surfaceId
@@ -79,13 +80,14 @@ export class A2uiProjector {
       case "message.delta": {
         const id = String(event.payload.message_id)
         const path = `/messages/${id}`
+        const author = String(event.payload.role ?? "ai") === "user" ? "user" : "ai"
         const prev = this.messageText.get(id)
         const next = (prev ?? "") + String(event.payload.delta ?? "")
         this.messageText.set(id, next)
         if (prev === undefined) {
           this.children.push(id)
           return [
-            this.mountComponent(id, "Message", { author: "ai", text: { path } }),
+            this.mountComponent(id, "Message", { author, text: { path } }),
             this.setData(path, next),
             this.rootOp(),
           ]
@@ -103,10 +105,16 @@ export class A2uiProjector {
       case "run.failed": {
         const id = `err_${event.run_id}`
         const path = `/messages/${id}`
+        const value = `⚠️ ${String(event.payload.message ?? "")}`
+        // 同一 run 多次 failed：只挂载一次错误 Message，后续仅更新错误文本。
+        if (this.erroredRuns.has(event.run_id)) {
+          return [this.setData(path, value)]
+        }
+        this.erroredRuns.add(event.run_id)
         this.children.push(id)
         return [
           this.mountComponent(id, "Message", { author: "ai", text: { path } }),
-          this.setData(path, `⚠️ ${String(event.payload.message ?? "")}`),
+          this.setData(path, value),
           this.rootOp(),
         ]
       }

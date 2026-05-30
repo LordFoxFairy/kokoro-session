@@ -96,12 +96,14 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("createSurface")
     expect(text).toContain("kokoro/chat/v1")
     expect(text).toContain("updateComponents")
+    // 完整 op 链路：createSurface→updateComponents→updateDataModel 都流过集成路径。
+    expect(text).toContain("updateDataModel")
     // SSE 三行结构：id / event / data。
     expect(text).toMatch(/id: [^\n]+\nevent: a2ui\.op\ndata: \{/)
   })
 })
 
-// 读到包含 createSurface 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
+// 读到包含 updateDataModel 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
 async function readSomeSse(res: Response): Promise<string> {
   const reader = res.body?.getReader()
   if (!reader) throw new Error("no body")
@@ -111,7 +113,7 @@ async function readSomeSse(res: Response): Promise<string> {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
-    if (buffer.includes("createSurface")) {
+    if (buffer.includes("updateDataModel")) {
       await reader.cancel()
       break
     }

@@ -73,6 +73,13 @@ describe("A2uiProjector", () => {
     expect(done).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/messages/run_1:msg_0001", value: "好的，最终答案。" } }])
   })
 
+  it("maps message.delta role:user to author:user", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    const d1 = p.project(ev("message.delta", { message_id: "run_1:msg_0001", delta: "在吗", role: "user" }, 2))
+    expect(d1[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "run_1:msg_0001", component: "Message", author: "user", text: { path: "/messages/run_1:msg_0001" } }] } })
+  })
+
   it("run.failed appends an error Message", () => {
     const p = new A2uiProjector("ses_1")
     p.project(ev("run.created", { run_id: "run_1" }, 1))
@@ -80,6 +87,19 @@ describe("A2uiProjector", () => {
     expect(ops[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "err_run_1", component: "Message", author: "ai", text: { path: "/messages/err_run_1" } }] } })
     expect(ops[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/messages/err_run_1", value: "⚠️ 炸了" } })
     expect(ops[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["err_run_1"] }] } })
+  })
+
+  it("dedupes repeated run.failed for same run_id (one err child, text updates)", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    p.project(ev("run.failed", { run_id: "run_1", message: "炸了" }, 2))
+    const second = p.project(ev("run.failed", { run_id: "run_1", message: "又炸了" }, 3))
+    // 第二次只更新文本，不再 mount / 不再 push child
+    expect(second).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/messages/err_run_1", value: "⚠️ 又炸了" } }])
+    // 触发一次 thinking 强制吐出 rootOp，验证 children 仅含一个 err_ child
+    const ops = p.project(ev("thinking.summary", { run_id: "run_1", summary: "x" }, 4))
+    const rootOp = ops[2]
+    expect(rootOp).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["err_run_1", "th_1"] }] } })
   })
 
   it("run.completed yields nothing", () => {

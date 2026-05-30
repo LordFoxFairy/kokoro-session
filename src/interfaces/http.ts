@@ -125,18 +125,17 @@ async function streamSession(
     connection: "keep-alive",
   })
 
-  // 每个连接独立 projector：把有序 SessionEvent 投影成 A2UI op，先重放快照再续订。
   const projector = new A2uiProjector(sessionId)
-  const writeEvent = (event: SessionEvent, opSeqBase: number): void => {
+  const writeEvent = (event: SessionEvent): void => {
     projector.project(event).forEach((op, i) => {
-      res.write(toA2uiSseChunk(op, `${event.cursor}:${opSeqBase + i}`))
+      res.write(toA2uiSseChunk(op, `${event.cursor}:${i}`))
     })
   }
 
   const snapshot = await readReplaySnapshot(dependencies.streamPort, sessionId)
   let lastCursor = ""
   for (const event of snapshot) {
-    writeEvent(event, 0)
+    writeEvent(event)
     lastCursor = event.cursor
   }
 
@@ -148,7 +147,7 @@ async function streamSession(
 
   for await (const item of dependencies.streamPort.subscribe(stream, lastCursor)) {
     if (aborted) break
-    writeEvent(parseSessionEvent(item.event), 0)
+    writeEvent(parseSessionEvent(item.event))
   }
   res.end()
 }
