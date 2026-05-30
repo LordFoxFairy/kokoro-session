@@ -102,9 +102,10 @@ export class Normalizer {
           }),
         ]
       }
-      // tool.invoked / tool.returned 暂不投影到出站 AGUI 流（v1.0.0 未定义工具事件）。
+      // tool/thinking 归一化在 B2 实现。
       case "tool.invoked":
       case "tool.returned":
+      case "thinking.delta":
         return []
     }
   }

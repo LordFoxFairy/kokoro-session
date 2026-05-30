@@ -25,17 +25,27 @@ const runFailedPayload = z
   })
   .strict()
 
+// 工具事件按 agent-events v0.2.0：用局部引用 tool_call_ref + tool_name，
+// session 负责映射成对外稳定 tool_call_id。
 const toolInvokedPayload = z
   .object({
-    tool: z.string().min(1),
-    input: z.unknown(),
+    tool_call_ref: z.string().min(1),
+    tool_name: z.string().min(1),
   })
   .strict()
 
 const toolReturnedPayload = z
   .object({
-    tool: z.string().min(1),
-    output: z.unknown(),
+    tool_call_ref: z.string().min(1),
+    tool_name: z.string().min(1),
+    status: z.string().min(1),
+  })
+  .strict()
+
+// thinking.delta（v0.2.0 新增）：思考增量文本，session 累加后归一成一条 thinking.summary。
+const thinkingDeltaPayload = z
+  .object({
+    text: z.string(),
   })
   .strict()
 
@@ -48,6 +58,7 @@ export const agentEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text.completed"), run_id: z.string().min(1), seq, payload: textPayload }).strict(),
   z.object({ kind: z.literal("tool.invoked"), run_id: z.string().min(1), seq, payload: toolInvokedPayload }).strict(),
   z.object({ kind: z.literal("tool.returned"), run_id: z.string().min(1), seq, payload: toolReturnedPayload }).strict(),
+  z.object({ kind: z.literal("thinking.delta"), run_id: z.string().min(1), seq, payload: thinkingDeltaPayload }).strict(),
   z.object({ kind: z.literal("run.completed"), run_id: z.string().min(1), seq, payload: runCompletedPayload }).strict(),
   z.object({ kind: z.literal("run.failed"), run_id: z.string().min(1), seq, payload: runFailedPayload }).strict(),
 ])
