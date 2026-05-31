@@ -11,7 +11,13 @@ import { buildServer } from "../src/interfaces/http"
 function makeDeps() {
   const streamPort = new MemoryStreamPort()
   const replayStore = makeReplayStore(streamPort)
-  return { streamPort, replayStore }
+  let n = 0
+  return {
+    streamPort,
+    replayStore,
+    newEventId: () => `evt_${++n}`,
+    now: () => new Date("2026-05-31T00:00:00.000Z"),
+  }
 }
 
 let server: ReturnType<typeof buildServer>
@@ -150,6 +156,56 @@ describe("GET /sessions/:id/stream", () => {
     // 连接后追加的文本经 updateDataModel 活体送达。
     expect(text).toContain("LIVE-OK")
     expect(text).toContain("updateDataModel")
+  })
+
+  test("permission fixture run replays a PermissionCard over SSE", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const res = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { runId: string }
+    expect(body.runId).toMatch(/^run_/)
+
+    const stream = await fetch(`${baseUrl}/sessions/ses_perm/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(3000),
+    })
+    const text = await readUntil(stream, "PermissionCard")
+    expect(text).toContain("event: a2ui.op")
+    expect(text).toContain("PermissionCard")
+    expect(text).toContain("我想访问这个外部资源，可以吗？")
+  })
+
+  test("permission decision endpoint resolves the existing card in place", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const start = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(start.status).toBe(200)
+    const { runId } = (await start.json()) as { runId: string }
+    const requestId = `perm_${runId}`
+
+    const stream = await fetch(`${baseUrl}/sessions/ses_perm/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(5000),
+    })
+    const reading = readUntil(stream, "这一步已经允许继续了。")
+
+    const decision = await fetch(`${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "once" }),
+    })
+
+    expect(decision.status).toBe(200)
+    const live = await reading
+    expect(live).toContain("这一步已经允许继续了。")
+    expect(live).toContain("updateDataModel")
   })
 })
 
