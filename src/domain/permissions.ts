@@ -12,9 +12,9 @@ export const permissionRequiredPayloadSchema = z
   .object({
     request_id: z.string().min(1),
     decision: permissionDecisionSchema,
-    message: z.string(),
+    message: z.string().min(1),
     options: z.array(permissionOptionSchema).optional(),
-    kind: permissionKindSchema,
+    kind: permissionKindSchema.optional(),
     scope: permissionScopeSchema.optional(),
   })
   .strict()
@@ -33,6 +33,9 @@ export const permissionDecisionBodySchema = z.union([
     .strict(),
 ])
 
+// Synthetic-first helper for current single-request fixtures.
+// Keep one-arg behavior stable (`perm_${runId}`); callers that need multiple
+// permission requests per run should supply their own distinct request_id values.
 export function permissionRequestIdForRun(runId: string): string {
   return `perm_${runId}`
 }

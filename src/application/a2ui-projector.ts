@@ -128,19 +128,21 @@ export class A2uiProjector {
         const path = `/permissions/${requestId}`
         const decision = String(event.payload.decision ?? "ask")
         const message = String(event.payload.message ?? "")
-        const kind = String(event.payload.kind ?? "permission")
         const value: {
           requestId: string
           decision: string
           scope?: string
           message: string
           options?: string[]
-          kind: string
+          kind?: string
         } = {
           requestId,
           decision,
           message,
-          kind,
+        }
+
+        if (event.payload.kind !== undefined) {
+          value.kind = String(event.payload.kind)
         }
 
         if (event.payload.scope !== undefined) {
@@ -151,7 +153,7 @@ export class A2uiProjector {
           value.options = event.payload.options.map((option) => String(option))
         }
 
-        if (!this.mountedPermissionRequestIds.has(requestId) && decision === "ask") {
+        if (!this.mountedPermissionRequestIds.has(requestId)) {
           this.mountedPermissionRequestIds.add(requestId)
           this.children.push(requestId)
           return [

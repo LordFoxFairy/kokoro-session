@@ -137,6 +137,24 @@ describe("A2uiProjector", () => {
     expect(resolved).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_1", value: { requestId: "perm_run_1", decision: "allow", scope: "session", message: "Allowed", kind: "permission" } } }])
   })
 
+  it("mounts PermissionCard when permission.required first arrives already resolved", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    const resolved = p.project(ev("permission.required", { request_id: "perm_run_2", decision: "deny", message: "Denied", kind: "permission" }, 2))
+    expect(resolved[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "perm_run_2", component: "PermissionCard", sessionId: "ses_1", requestPath: { path: "/permissions/perm_run_2" } }] } })
+    expect(resolved[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_2", value: { requestId: "perm_run_2", decision: "deny", message: "Denied", kind: "permission" } } })
+    expect(resolved[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_2"] }] } })
+  })
+
+  it("dedupes repeated permission.required ask for the same request_id", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    p.project(ev("permission.required", { request_id: "perm_run_1", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission" }, 2))
+    const second = p.project(ev("permission.required", { request_id: "perm_run_1", decision: "ask", message: "Still need permission", options: ["once", "session", "deny"], kind: "permission" }, 3))
+    expect(second).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_1", value: { requestId: "perm_run_1", decision: "ask", message: "Still need permission", options: ["once", "session", "deny"], kind: "permission" } } }])
+    const ops = p.project(ev("thinking.summary", { run_id: "run_1", summary: "x" }, 4))
+    expect(ops[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_1", "th_1"] }] } })
+  })
 
   it("plan.updated with empty todos mounts nothing until non-empty", () => {
     const p = new A2uiProjector("ses_1")
