@@ -8,16 +8,45 @@ export const permissionKindSchema = z.enum(["permission", "circuit_breaker"])
 
 export const permissionOptionSchema = z.enum(["once", "session", "deny"])
 
-export const permissionRequiredPayloadSchema = z
+const permissionAskPayloadSchema = z
   .object({
     request_id: z.string().min(1),
-    decision: permissionDecisionSchema,
+    decision: z.literal("ask"),
     message: z.string().min(1),
     options: z.array(permissionOptionSchema).optional(),
-    kind: permissionKindSchema.optional(),
     scope: permissionScopeSchema.optional(),
+    kind: permissionKindSchema.optional(),
+    suggested_default: permissionOptionSchema.optional(),
+    danger_level: z.string().min(1).optional(),
   })
   .strict()
+
+const permissionAllowPayloadSchema = z
+  .object({
+    request_id: z.string().min(1),
+    decision: z.literal("allow"),
+    message: z.string().min(1),
+    scope: permissionScopeSchema,
+    kind: permissionKindSchema.optional(),
+  })
+  .strict()
+
+const permissionDenyPayloadSchema = z
+  .object({
+    request_id: z.string().min(1),
+    decision: z.literal("deny"),
+    message: z.string().min(1),
+    kind: permissionKindSchema.optional(),
+    reason: z.string().min(1).optional(),
+    retryable: z.boolean().optional(),
+  })
+  .strict()
+
+export const permissionRequiredPayloadSchema = z.discriminatedUnion("decision", [
+  permissionAskPayloadSchema,
+  permissionAllowPayloadSchema,
+  permissionDenyPayloadSchema,
+])
 
 export const permissionDecisionBodySchema = z.union([
   z

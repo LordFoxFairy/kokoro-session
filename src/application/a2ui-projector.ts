@@ -1,5 +1,6 @@
 import type { SessionEvent } from "../domain/events"
 import { a2uiOpSchema, type A2uiOp, type A2uiComponent } from "../domain/a2ui"
+import { permissionRequiredPayloadSchema } from "../domain/permissions"
 
 const CATALOG_ID = "kokoro/chat/v1"
 
@@ -124,33 +125,54 @@ export class A2uiProjector {
         return [this.setData(path, todos)]
       }
       case "permission.required": {
-        const requestId = String(event.payload.request_id)
+        const payload = permissionRequiredPayloadSchema.parse(event.payload)
+        const requestId = payload.request_id
         const path = `/permissions/${requestId}`
-        const decision = String(event.payload.decision ?? "ask")
-        const message = String(event.payload.message ?? "")
         const value: {
           requestId: string
-          decision: string
-          scope?: string
+          decision: "ask" | "allow" | "deny"
+          scope?: "once" | "session"
           message: string
-          options?: string[]
-          kind?: string
+          options?: Array<"once" | "session" | "deny">
+          kind?: "permission" | "circuit_breaker"
+          suggestedDefault?: "once" | "session" | "deny"
+          dangerLevel?: string
+          reason?: string
+          retryable?: boolean
         } = {
           requestId,
-          decision,
-          message,
+          decision: payload.decision,
+          message: payload.message,
         }
 
-        if (event.payload.kind !== undefined) {
-          value.kind = String(event.payload.kind)
+        if (payload.kind !== undefined) {
+          value.kind = payload.kind
         }
 
-        if (event.payload.scope !== undefined) {
-          value.scope = String(event.payload.scope)
+        if ("scope" in payload && payload.scope !== undefined) {
+          value.scope = payload.scope
         }
 
-        if (Array.isArray(event.payload.options)) {
-          value.options = event.payload.options.map((option) => String(option))
+        if ("options" in payload && payload.options !== undefined) {
+          value.options = payload.options
+        }
+
+        if (payload.decision === "ask") {
+          if (payload.suggested_default !== undefined) {
+            value.suggestedDefault = payload.suggested_default
+          }
+          if (payload.danger_level !== undefined) {
+            value.dangerLevel = payload.danger_level
+          }
+        }
+
+        if (payload.decision === "deny") {
+          if (payload.reason !== undefined) {
+            value.reason = payload.reason
+          }
+          if (payload.retryable !== undefined) {
+            value.retryable = payload.retryable
+          }
         }
 
         if (!this.mountedPermissionRequestIds.has(requestId)) {

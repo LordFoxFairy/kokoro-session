@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { A2uiProjector } from "../src/application/a2ui-projector"
 import type { SessionEvent } from "../src/domain/events"
+import { permissionRequiredPayloadSchema } from "../src/domain/permissions"
 
 function ev(event: SessionEvent["event"], payload: Record<string, unknown>, n: number): SessionEvent {
   return {
@@ -123,9 +124,10 @@ describe("A2uiProjector", () => {
   it("projects permission.required ask into PermissionCard mount + dataModel", () => {
     const p = new A2uiProjector("ses_1")
     p.project(ev("run.created", { run_id: "run_1" }, 1))
-    const ask = p.project(ev("permission.required", { request_id: "perm_run_1", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission" }, 2))
+    const askPayload = permissionRequiredPayloadSchema.parse({ request_id: "perm_run_1", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission", suggested_default: "once", danger_level: "high" })
+    const ask = p.project(ev("permission.required", askPayload, 2))
     expect(ask[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "perm_run_1", component: "PermissionCard", sessionId: "ses_1", requestPath: { path: "/permissions/perm_run_1" } }] } })
-    expect(ask[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_1", value: { requestId: "perm_run_1", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission" } } })
+    expect(ask[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_1", value: { requestId: "perm_run_1", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission", suggestedDefault: "once", dangerLevel: "high" } } })
     expect(ask[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_1"] }] } })
   })
 
@@ -140,9 +142,9 @@ describe("A2uiProjector", () => {
   it("mounts PermissionCard when permission.required first arrives already resolved", () => {
     const p = new A2uiProjector("ses_1")
     p.project(ev("run.created", { run_id: "run_1" }, 1))
-    const resolved = p.project(ev("permission.required", { request_id: "perm_run_2", decision: "deny", message: "Denied", kind: "permission" }, 2))
+    const resolved = p.project(ev("permission.required", { request_id: "perm_run_2", decision: "deny", message: "Denied", kind: "permission", reason: "transport_error", retryable: true }, 2))
     expect(resolved[0]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "perm_run_2", component: "PermissionCard", sessionId: "ses_1", requestPath: { path: "/permissions/perm_run_2" } }] } })
-    expect(resolved[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_2", value: { requestId: "perm_run_2", decision: "deny", message: "Denied", kind: "permission" } } })
+    expect(resolved[1]).toEqual({ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_2", value: { requestId: "perm_run_2", decision: "deny", message: "Denied", kind: "permission", reason: "transport_error", retryable: true } } })
     expect(resolved[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_2"] }] } })
   })
 
@@ -154,6 +156,17 @@ describe("A2uiProjector", () => {
     expect(second).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_1", value: { requestId: "perm_run_1", decision: "ask", message: "Still need permission", options: ["once", "session", "deny"], kind: "permission" } } }])
     const ops = p.project(ev("thinking.summary", { run_id: "run_1", summary: "x" }, 4))
     expect(ops[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_1", "th_1"] }] } })
+  })
+
+  it("dedupes replayed permission.required ask -> allow -> allow for the same request_id", () => {
+    const p = new A2uiProjector("ses_1")
+    p.project(ev("run.created", { run_id: "run_1" }, 1))
+    p.project(ev("permission.required", { request_id: "perm_run_3", decision: "ask", message: "Need permission", options: ["once", "session", "deny"], kind: "permission" }, 2))
+    p.project(ev("permission.required", { request_id: "perm_run_3", decision: "allow", message: "Allowed", scope: "session", kind: "permission" }, 3))
+    const replayedResolved = p.project(ev("permission.required", { request_id: "perm_run_3", decision: "allow", message: "Allowed again", scope: "session", kind: "permission" }, 4))
+    expect(replayedResolved).toEqual([{ version: "v0.9", updateDataModel: { surfaceId: "ses_1", path: "/permissions/perm_run_3", value: { requestId: "perm_run_3", decision: "allow", scope: "session", message: "Allowed again", kind: "permission" } } }])
+    const ops = p.project(ev("thinking.summary", { run_id: "run_1", summary: "x" }, 5))
+    expect(ops[2]).toEqual({ version: "v0.9", updateComponents: { surfaceId: "ses_1", components: [{ id: "root", component: "Thread", children: ["perm_run_3", "th_1"] }] } })
   })
 
   it("plan.updated with empty todos mounts nothing until non-empty", () => {
