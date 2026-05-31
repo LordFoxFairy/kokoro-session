@@ -55,6 +55,28 @@ function defaultRunId(): string {
   return `run_${randomUUID().replace(/-/g, "").slice(0, 16)}`
 }
 
+const permissionDecisionQueues = new Map<string, Promise<void>>()
+
+async function withPermissionDecisionQueue<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const previous = permissionDecisionQueues.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const queued = previous.then(() => current)
+  permissionDecisionQueues.set(key, queued)
+
+  await previous
+  try {
+    return await work()
+  } finally {
+    release()
+    if (permissionDecisionQueues.get(key) === queued) {
+      permissionDecisionQueues.delete(key)
+    }
+  }
+}
+
 export function buildServer(dependencies: BuildServerDependencies) {
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res, dependencies).catch((error: unknown) => {
@@ -273,66 +295,71 @@ async function decidePermission(
 ): Promise<void> {
   try {
     const body = permissionDecisionBodySchema.parse(await readJson(req))
-    const stream = replayStream(sessionId)
-    const snapshot = await dependencies.streamPort.readAll(stream)
-    const current = snapshot
-      .map((item) => parseSessionEvent(item.event))
-      .filter((event) => event.event === "permission.required" && event.payload.request_id === requestId)
-      .at(-1)
+    const payload = await withPermissionDecisionQueue(`${sessionId}:${requestId}`, async () => {
+      const stream = replayStream(sessionId)
+      const snapshot = await dependencies.streamPort.readAll(stream)
+      const current = snapshot
+        .map((item) => parseSessionEvent(item.event))
+        .filter((event) => event.event === "permission.required" && event.payload.request_id === requestId)
+        .at(-1)
 
-    if (!current) {
+      if (!current) {
+        return { kind: "not_found" as const }
+      }
+
+      if (current.payload.decision !== "ask") {
+        return { kind: "resolved" as const, payload: current.payload }
+      }
+
+      const runEvents = snapshot
+        .map((item) => parseSessionEvent(item.event))
+        .filter((event) => event.run_id === current.run_id)
+      const nextSeq = runEvents
+        .map((event) => Number(event.cursor.split(":").at(-1) ?? 0))
+        .reduce((max, n) => Math.max(max, Number.isFinite(n) ? n : 0), 0) + 1
+
+      const nextPayload = body.decision === "allow"
+        ? {
+            request_id: requestId,
+            decision: "allow" as const,
+            scope: body.scope,
+            message: body.scope === "session"
+              ? "本会话内同类动作已允许继续。"
+              : "这一步已经允许继续了。",
+            kind: current.payload.kind,
+          }
+        : {
+            request_id: requestId,
+            decision: "deny" as const,
+            message: "这一步未被允许继续。",
+            kind: current.payload.kind,
+          }
+
+      await dependencies.replayStore.append(sessionId, [{
+        event: "permission.required",
+        event_id: newEventId(),
+        session_id: current.session_id,
+        conversation_id: current.conversation_id,
+        run_id: current.run_id,
+        cursor: `${current.run_id}:${String(nextSeq).padStart(4, "0")}`,
+        timestamp: now().toISOString(),
+        payload: nextPayload,
+      }])
+
+      return { kind: "appended" as const, payload: nextPayload }
+    })
+
+    if (payload.kind === "not_found") {
       res.statusCode = 404
       res.end("unknown permission request")
       return
     }
 
-    if (current.payload.decision !== "ask") {
-      res.statusCode = 200
-      res.setHeader("content-type", "application/json")
-      res.end(JSON.stringify(current.payload))
-      return
-    }
-
-    const runEvents = snapshot
-      .map((item) => parseSessionEvent(item.event))
-      .filter((event) => event.run_id === current.run_id)
-    const nextSeq = runEvents
-      .map((event) => Number(event.cursor.split(":").at(-1) ?? 0))
-      .reduce((max, n) => Math.max(max, Number.isFinite(n) ? n : 0), 0) + 1
-
-    const payload = body.decision === "allow"
-      ? {
-          request_id: requestId,
-          decision: "allow" as const,
-          scope: body.scope,
-          message: body.scope === "session"
-            ? "本会话内同类动作已允许继续。"
-            : "这一步已经允许继续了。",
-          kind: current.payload.kind,
-        }
-      : {
-          request_id: requestId,
-          decision: "deny" as const,
-          message: "这一步未被允许继续。",
-          kind: current.payload.kind,
-        }
-
-    await dependencies.replayStore.append(sessionId, [{
-      event: "permission.required",
-      event_id: newEventId(),
-      session_id: current.session_id,
-      conversation_id: current.conversation_id,
-      run_id: current.run_id,
-      cursor: `${current.run_id}:${String(nextSeq).padStart(4, "0")}`,
-      timestamp: now().toISOString(),
-      payload,
-    }])
-
     res.statusCode = 200
     res.setHeader("content-type", "application/json")
-    res.end(JSON.stringify(payload))
+    res.end(JSON.stringify(payload.payload))
   } catch (error: unknown) {
-    if (error instanceof ZodError) {
+    if (error instanceof ZodError || error instanceof SyntaxError) {
       res.statusCode = 400
       res.setHeader("content-type", "application/json")
       res.end(JSON.stringify({ error: "invalid decision payload" }))
