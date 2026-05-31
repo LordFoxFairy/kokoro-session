@@ -6,6 +6,8 @@ const sessionEventNames = [
   "thinking.summary",
   "tool.started",
   "tool.completed",
+  "plan.updated",
+  "permission.required",
   "run.completed",
   "run.failed",
 ] as const

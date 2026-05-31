@@ -11,7 +11,13 @@ import { buildServer } from "../src/interfaces/http"
 function makeDeps() {
   const streamPort = new MemoryStreamPort()
   const replayStore = makeReplayStore(streamPort)
-  return { streamPort, replayStore }
+  let n = 0
+  return {
+    streamPort,
+    replayStore,
+    newEventId: () => `evt_${++n}`,
+    now: () => new Date("2026-05-31T00:00:00.000Z"),
+  }
 }
 
 let server: ReturnType<typeof buildServer>
@@ -151,6 +157,186 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("LIVE-OK")
     expect(text).toContain("updateDataModel")
   })
+
+  test("permission fixture run replays a PermissionCard over SSE", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const res = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { runId: string }
+    expect(body.runId).toMatch(/^run_/)
+
+    const stream = await fetch(`${baseUrl}/sessions/ses_perm/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(3000),
+    })
+    const text = await readUntil(stream, "PermissionCard")
+    expect(text).toContain("event: a2ui.op")
+    expect(text).toContain("PermissionCard")
+    expect(text).toContain("我想访问这个外部资源，可以吗？")
+  })
+
+  test("permission decision endpoint resolves the existing card in place", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const start = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(start.status).toBe(200)
+    const { runId } = (await start.json()) as { runId: string }
+    const requestId = `perm_${runId}`
+
+    const stream = await fetch(`${baseUrl}/sessions/ses_perm/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(5000),
+    })
+    const reading = readUntil(stream, "这一步已经允许继续了。")
+
+    const decision = await fetch(`${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "once" }),
+    })
+
+    expect(decision.status).toBe(200)
+    const live = await reading
+    expect(live).toContain("这一步已经允许继续了。")
+    expect(live).toContain("updateDataModel")
+  })
+
+  test("permission decision endpoint is idempotent after resolve", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const start = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(start.status).toBe(200)
+    const { runId } = (await start.json()) as { runId: string }
+    const requestId = `perm_${runId}`
+
+    const first = await fetch(`${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "once" }),
+    })
+    expect(first.status).toBe(200)
+
+    const second = await fetch(`${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "session" }),
+    })
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({
+      request_id: requestId,
+      decision: "allow",
+      scope: "once",
+      message: "这一步已经允许继续了。",
+      kind: "permission",
+    })
+
+    const permissionEvents = deps.replayStore
+      .read("ses_perm")
+      .filter((event) => event.event === "permission.required" && event.payload.request_id === requestId)
+    expect(permissionEvents).toHaveLength(2)
+  })
+
+  test("permission decision endpoint serializes concurrent duplicate submits", async () => {
+    const deps = makeDeps()
+    const originalAppend = deps.replayStore.append.bind(deps.replayStore)
+    let resolvedAppends = 0
+    let releaseFirstAppend!: () => void
+    const firstAppendGate = new Promise<void>((resolve) => {
+      releaseFirstAppend = () => resolve()
+    })
+
+    deps.replayStore.append = async (sessionId, events) => {
+      const resolvedPermission = events.some(
+        (event) => event.event === "permission.required" && event.payload.decision !== "ask",
+      )
+      if (resolvedPermission) {
+        resolvedAppends += 1
+        if (resolvedAppends === 1) {
+          await firstAppendGate
+        }
+      }
+      return originalAppend(sessionId, events)
+    }
+
+    await listen(deps)
+
+    const start = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(start.status).toBe(200)
+    const { runId } = (await start.json()) as { runId: string }
+    const requestId = `perm_${runId}`
+    const url = `${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`
+
+    const first = fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "once" }),
+    })
+    await waitUntil(() => resolvedAppends === 1)
+
+    const second = fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision: "allow", scope: "session" }),
+    })
+
+    const secondReachedAppendBeforeRelease = await waitUntilOrTimeout(() => resolvedAppends === 2, 100)
+    try {
+      expect(secondReachedAppendBeforeRelease).toBe(false)
+    } finally {
+      if (releaseFirstAppend) {
+        releaseFirstAppend()
+      }
+    }
+
+    const [firstRes, secondRes] = await Promise.all([first, second])
+    expect(firstRes.status).toBe(200)
+    expect(secondRes.status).toBe(200)
+    expect(await secondRes.json()).toEqual({
+      request_id: requestId,
+      decision: "allow",
+      scope: "once",
+      message: "这一步已经允许继续了。",
+      kind: "permission",
+    })
+
+    const permissionEvents = deps.replayStore
+      .read("ses_perm")
+      .filter((event) => event.event === "permission.required" && event.payload.request_id === requestId)
+    expect(permissionEvents).toHaveLength(2)
+  })
+
+  test("permission decision endpoint returns 400 for malformed JSON", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const start = await fetch(`${baseUrl}/sessions/ses_perm/runs?input=hello&fixture=permission`, {
+      method: "POST",
+    })
+    expect(start.status).toBe(200)
+    const { runId } = (await start.json()) as { runId: string }
+    const requestId = `perm_${runId}`
+
+    const decision = await fetch(`${baseUrl}/sessions/ses_perm/permissions/${requestId}/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"decision":',
+    })
+
+    expect(decision.status).toBe(400)
+    expect(await decision.json()).toEqual({ error: "invalid decision payload" })
+  })
 })
 
 // 读到出现哨兵串即返回（活体送达验证），带兜底防止挂死。
@@ -191,4 +377,18 @@ async function readSomeSse(res: Response): Promise<string> {
     }
   }
   return buffer
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const ok = await waitUntilOrTimeout(predicate, timeoutMs)
+  if (!ok) throw new Error("condition not met before timeout")
+}
+
+async function waitUntilOrTimeout(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await Bun.sleep(10)
+  }
+  return predicate()
 }

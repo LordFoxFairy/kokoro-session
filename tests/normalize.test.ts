@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, it, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
 import { parseSessionEvent } from "../src/domain/events"
@@ -15,6 +15,10 @@ function makeNormalizer() {
     newEventId: () => `evt_${String(++n).padStart(4, "0")}`,
     now: () => new Date("2026-05-30T00:00:00.000Z"),
   })
+}
+
+function clock() {
+  return { newEventId: () => "evt", now: () => new Date("2026-05-31T00:00:00Z") }
 }
 
 describe("Normalizer", () => {
@@ -254,5 +258,40 @@ describe("Normalizer", () => {
     const b = n.ingest({ kind: "tool.invoked", run_id: "run_x", seq: 1, payload: { tool_call_ref: "tc1", tool_name: "t" } })
     expect(a).toHaveLength(1)
     expect(b).toEqual([])
+  })
+})
+
+describe("Normalizer — write_todos harness recognition", () => {
+  it("recognizes write_todos tool.invoked as an internal plan.updated (suppressing tool card)", () => {
+    const norm = new Normalizer({ sessionId: "s", conversationId: "c", runId: "run_1" }, clock())
+    norm.ingest({ kind: "run.started", run_id: "run_1", seq: 1, payload: {} })
+    const out = norm.ingest({ kind: "tool.invoked", run_id: "run_1", seq: 2, payload: { tool_call_ref: "wt1", tool_name: "write_todos", args: { todos: [{ content: "a", status: "pending" }] } } })
+    const plan = out.find((e) => e.event === "plan.updated")
+    expect(plan).toBeDefined()
+    expect(plan!.payload.plan_id).toBe("run_1:plan")
+    expect((plan!.payload.todos as unknown[]).length).toBe(1)
+    // 不产 tool.started
+    expect(out.some((e) => e.event === "tool.started")).toBe(false)
+    // 其对应 tool.returned 被吞
+    const ret = norm.ingest({ kind: "tool.returned", run_id: "run_1", seq: 3, payload: { tool_call_ref: "wt1", tool_name: "write_todos", status: "ok" } })
+    expect(ret).toEqual([])
+  })
+
+  it("keeps non-write_todos tools as normal tool.started/completed", () => {
+    const norm = new Normalizer({ sessionId: "s", conversationId: "c", runId: "run_1" }, clock())
+    norm.ingest({ kind: "run.started", run_id: "run_1", seq: 1, payload: {} })
+    const inv = norm.ingest({ kind: "tool.invoked", run_id: "run_1", seq: 2, payload: { tool_call_ref: "es1", tool_name: "echo_search", args: { query: "x" } } })
+    expect(inv.some((e) => e.event === "tool.started")).toBe(true)
+  })
+
+  it("write_todos with NO args field → plan.updated with empty todos (?? {} fallback)", () => {
+    const norm = new Normalizer({ sessionId: "s", conversationId: "c", runId: "run_1" }, clock())
+    norm.ingest({ kind: "run.started", run_id: "run_1", seq: 1, payload: {} })
+    const out = norm.ingest({ kind: "tool.invoked", run_id: "run_1", seq: 2, payload: { tool_call_ref: "wt1", tool_name: "write_todos" } })
+    const plan = out.find((e) => e.event === "plan.updated")
+    expect(plan).toBeDefined()
+    expect(plan!.payload.plan_id).toBe("run_1:plan")
+    expect(plan!.payload.todos).toEqual([])
+    expect(out.some((e) => e.event === "tool.started")).toBe(false)
   })
 })

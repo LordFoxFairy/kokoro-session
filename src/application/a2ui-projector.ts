@@ -1,5 +1,6 @@
 import type { SessionEvent } from "../domain/events"
 import { a2uiOpSchema, type A2uiOp, type A2uiComponent } from "../domain/a2ui"
+import { permissionRequiredPayloadSchema } from "../domain/permissions"
 
 const CATALOG_ID = "kokoro/chat/v1"
 
@@ -13,6 +14,10 @@ export class A2uiProjector {
   private thinkingCounter = 0
   private readonly messageText = new Map<string, string>()
   private readonly erroredRuns = new Set<string>()
+  // 假设：每个 run 至多一个 plan，id 稳定为 `{run_id}:plan`（见 normalize 的 plan.updated）。
+  // 若未来新增第二种 plan 类型，这个单 boolean 会静默抑制其挂载——届时需改为按 id 分轨。
+  private planMounted = false
+  private readonly mountedPermissionRequestIds = new Set<string>()
 
   constructor(surfaceId: string) {
     this.surfaceId = surfaceId
@@ -99,6 +104,88 @@ export class A2uiProjector {
         const path = `/messages/${id}`
         this.messageText.set(id, String(event.payload.content ?? ""))
         return [this.setData(path, String(event.payload.content ?? ""))]
+      }
+      case "plan.updated": {
+        const id = String(event.payload.plan_id)
+        const path = `/plans/${id}`
+        const todos = event.payload.todos
+        if (!Array.isArray(todos) || todos.length === 0) {
+          if (!this.planMounted) return [] // 空且未挂 → 不产
+        }
+        if (!this.planMounted) {
+          this.planMounted = true
+          this.children.push(id)
+          return [
+            this.mountComponent(id, "Plan", { todosPath: { path } }),
+            this.setData(path, todos),
+            this.rootOp(),
+          ]
+        }
+        // mounted + empty todos → fall through to setData (clears the plan)
+        return [this.setData(path, todos)]
+      }
+      case "permission.required": {
+        const payload = permissionRequiredPayloadSchema.parse(event.payload)
+        const requestId = payload.request_id
+        const path = `/permissions/${requestId}`
+        const value: {
+          requestId: string
+          decision: "ask" | "allow" | "deny"
+          scope?: "once" | "session"
+          message: string
+          options?: Array<"once" | "session" | "deny">
+          kind?: "permission" | "circuit_breaker"
+          suggestedDefault?: "once" | "session" | "deny"
+          dangerLevel?: string
+          reason?: string
+          retryable?: boolean
+        } = {
+          requestId,
+          decision: payload.decision,
+          message: payload.message,
+        }
+
+        if (payload.kind !== undefined) {
+          value.kind = payload.kind
+        }
+
+        if ("scope" in payload && payload.scope !== undefined) {
+          value.scope = payload.scope
+        }
+
+        if ("options" in payload && payload.options !== undefined) {
+          value.options = payload.options
+        }
+
+        if (payload.decision === "ask") {
+          if (payload.suggested_default !== undefined) {
+            value.suggestedDefault = payload.suggested_default
+          }
+          if (payload.danger_level !== undefined) {
+            value.dangerLevel = payload.danger_level
+          }
+        }
+
+        if (payload.decision === "deny") {
+          if (payload.reason !== undefined) {
+            value.reason = payload.reason
+          }
+          if (payload.retryable !== undefined) {
+            value.retryable = payload.retryable
+          }
+        }
+
+        if (!this.mountedPermissionRequestIds.has(requestId)) {
+          this.mountedPermissionRequestIds.add(requestId)
+          this.children.push(requestId)
+          return [
+            this.mountComponent(requestId, "PermissionCard", { sessionId: this.surfaceId, requestPath: { path } }),
+            this.setData(path, value),
+            this.rootOp(),
+          ]
+        }
+
+        return [this.setData(path, value)]
       }
       case "run.completed":
         return []
