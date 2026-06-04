@@ -18,12 +18,19 @@ function makeNormalizer() {
 }
 
 describe("Normalizer", () => {
-  test("run.started emits session.created (first) + run.created with run-scoped cursors", () => {
+  test("run.started emits protocol-complete session.created (first) + run.created with run-scoped cursors", () => {
     const n = makeNormalizer()
     const out = n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
 
     expect(out.map((e) => e.event)).toEqual(["session.created", "run.created"])
     expect(out.map((e) => e.cursor)).toEqual(["run_x:0001", "run_x:0002"])
+    expect(out[0]?.payload).toMatchObject({
+      session_id: "ses_01",
+      conversation_id: "conv_01",
+      owner_id: "kokoro-agent",
+      title: "conv_01",
+    })
+    expect(out[1]?.payload).toMatchObject({ run_id: "run_x" })
     for (const e of out) {
       expect(e.session_id).toBe("ses_01")
       expect(e.conversation_id).toBe("conv_01")
@@ -40,6 +47,40 @@ describe("Normalizer", () => {
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     const out = n.ingest({ kind: "run.started", run_id: "run_x", seq: 1, payload: {} })
     expect(out.map((e) => e.event)).toEqual(["run.created"])
+  })
+
+  test("parseSessionEvent accepts run.created payloads", () => {
+    expect(() =>
+      parseSessionEvent({
+        event: "run.created",
+        event_id: "evt_0002",
+        session_id: "ses_01",
+        conversation_id: "conv_01",
+        run_id: "run_x",
+        cursor: "run_x:0002",
+        timestamp: "2026-05-30T00:00:00.000Z",
+        payload: { run_id: "run_x" },
+      }),
+    ).not.toThrow()
+  })
+
+  test("parseSessionEvent rejects session.created without title", () => {
+    expect(() =>
+      parseSessionEvent({
+        event: "session.created",
+        event_id: "evt_0001",
+        session_id: "ses_01",
+        conversation_id: "conv_01",
+        run_id: "run_x",
+        cursor: "run_x:0001",
+        timestamp: "2026-05-30T00:00:00.000Z",
+        payload: {
+          session_id: "ses_01",
+          conversation_id: "conv_01",
+          owner_id: "kokoro-agent",
+        },
+      }),
+    ).toThrow()
   })
 
   test("text.delta maps to message.delta with stable message_id per message_ref", () => {

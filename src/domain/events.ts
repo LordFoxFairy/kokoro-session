@@ -1,13 +1,7 @@
-const sessionEventNames = [
-  "session.created",
-  "run.created",
-  "message.delta",
-  "message.completed",
-  "run.completed",
-  "run.failed",
-] as const
+import { z } from "zod"
 
-export type SessionEventName = (typeof sessionEventNames)[number]
+// 事件名集合的单一真理来源 = 下方 Zod 判别联合；类型从 schema 推导，避免重复维护两份名单。
+export type SessionEventName = z.infer<typeof sessionEventSchema>["event"]
 
 export type SessionEvent = {
   event: SessionEventName
@@ -20,71 +14,73 @@ export type SessionEvent = {
   payload: Record<string, unknown>
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+const nonEmptyString = z.string().min(1)
+
+const envelopeFields = {
+  event_id: nonEmptyString,
+  session_id: nonEmptyString,
+  conversation_id: nonEmptyString,
+  run_id: nonEmptyString,
+  cursor: nonEmptyString,
+  timestamp: nonEmptyString,
 }
 
-function isSessionEventName(value: unknown): value is SessionEventName {
-  return typeof value === "string" && sessionEventNames.includes(value as SessionEventName)
-}
+const sessionCreatedPayload = z
+  .object({
+    session_id: nonEmptyString,
+    conversation_id: nonEmptyString,
+    owner_id: nonEmptyString,
+    title: nonEmptyString,
+  })
+  .strict()
 
-// session 侧先严格守住传输 envelope，避免把脏事件写入 replay。
+const runCreatedPayload = z
+  .object({
+    run_id: nonEmptyString,
+  })
+  .strict()
+
+const messageDeltaPayload = z
+  .object({
+    message_id: nonEmptyString,
+    delta: z.string(),
+    role: nonEmptyString,
+  })
+  .strict()
+
+const messageCompletedPayload = z
+  .object({
+    message_id: nonEmptyString,
+    role: nonEmptyString,
+    content: z.string(),
+  })
+  .strict()
+
+const runCompletedPayload = z
+  .object({
+    run_id: nonEmptyString,
+    status: nonEmptyString,
+  })
+  .strict()
+
+const runFailedPayload = z
+  .object({
+    run_id: nonEmptyString,
+    error_kind: nonEmptyString,
+    message: z.string(),
+  })
+  .strict()
+
+const sessionEventSchema = z.discriminatedUnion("event", [
+  z.object({ event: z.literal("session.created"), ...envelopeFields, payload: sessionCreatedPayload }).strict(),
+  z.object({ event: z.literal("run.created"), ...envelopeFields, payload: runCreatedPayload }).strict(),
+  z.object({ event: z.literal("message.delta"), ...envelopeFields, payload: messageDeltaPayload }).strict(),
+  z.object({ event: z.literal("message.completed"), ...envelopeFields, payload: messageCompletedPayload }).strict(),
+  z.object({ event: z.literal("run.completed"), ...envelopeFields, payload: runCompletedPayload }).strict(),
+  z.object({ event: z.literal("run.failed"), ...envelopeFields, payload: runFailedPayload }).strict(),
+])
+
+// session 侧严格校验当前实际发出的 AGUI 事件族，避免把脏事件写入 replay 或 SSE。
 export function parseSessionEvent(input: unknown): SessionEvent {
-  if (!isRecord(input)) {
-    throw new Error("session event must be an object")
-  }
-
-  const {
-    event,
-    event_id,
-    session_id,
-    conversation_id,
-    run_id,
-    cursor,
-    timestamp,
-    payload,
-  } = input
-
-  if (!isSessionEventName(event)) {
-    throw new Error("session event has an unsupported event name")
-  }
-
-  if (typeof event_id !== "string" || !event_id) {
-    throw new Error("session event is missing event_id")
-  }
-
-  if (typeof session_id !== "string" || !session_id) {
-    throw new Error("session event is missing session_id")
-  }
-
-  if (typeof conversation_id !== "string" || !conversation_id) {
-    throw new Error("session event is missing conversation_id")
-  }
-
-  if (typeof run_id !== "string" || !run_id) {
-    throw new Error("session event is missing run_id")
-  }
-
-  if (typeof cursor !== "string" || !cursor) {
-    throw new Error("session event is missing cursor")
-  }
-
-  if (typeof timestamp !== "string" || !timestamp) {
-    throw new Error("session event is missing timestamp")
-  }
-
-  if (!isRecord(payload)) {
-    throw new Error("session event is missing payload")
-  }
-
-  return {
-    event,
-    event_id,
-    session_id,
-    conversation_id,
-    run_id,
-    cursor,
-    timestamp,
-    payload,
-  }
+  return sessionEventSchema.parse(input) as SessionEvent
 }

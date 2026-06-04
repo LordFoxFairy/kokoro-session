@@ -1,4 +1,4 @@
-import { parseSessionEvent, type SessionEvent } from "../domain/events"
+import type { SessionEvent } from "../domain/events"
 import { MemoryStreamPort, type StreamPort } from "./stream-port"
 
 // Replay store：会话级 AGUI 事件的持久回放，由 StreamPort 背书（memory/redis 可换）。
@@ -37,13 +37,4 @@ export function makeReplayStore(streamPort: StreamPort): ReplayStore {
 // 便捷构造：内存 StreamPort 背书。测试与单进程默认用它。
 export function memoryReplayStore(): ReplayStore {
   return makeReplayStore(new MemoryStreamPort())
-}
-
-// 从 StreamPort 读出某 session 的全量 replay 快照（跨进程，供 http 层 SSE 首屏使用）。
-export async function readReplaySnapshot(
-  streamPort: StreamPort,
-  sessionId: string,
-): Promise<SessionEvent[]> {
-  const items = await streamPort.readAll(replayStream(sessionId))
-  return items.map((item) => parseSessionEvent(item.event))
 }

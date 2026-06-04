@@ -120,7 +120,8 @@ export class RedisStreamPort implements StreamPort {
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
     await this.ensureConnected(this.blocking)
-    let lastId = fromCursor ?? "0-0"
+    // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
+    let lastId = fromCursor || "0-0"
     while (true) {
       const result = await this.blocking.xread(
         "BLOCK",

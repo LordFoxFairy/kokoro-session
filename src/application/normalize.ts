@@ -57,6 +57,7 @@ export class Normalizer {
               session_id: this.binding.sessionId,
               conversation_id: this.binding.conversationId,
               owner_id: "kokoro-agent",
+              title: this.sessionTitle(),
             }),
           )
         }
@@ -107,6 +108,10 @@ export class Normalizer {
       case "tool.returned":
         return []
     }
+  }
+
+  private sessionTitle(): string {
+    return this.binding.conversationId || this.binding.sessionId
   }
 
   private messageIdFor(messageRef: string): string {
