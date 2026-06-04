@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { startRun } from "../application/start_run"
 import { parseSessionEvent } from "../domain/events"
 import type { ReplayStore } from "../infrastructure/replay_store"
-import { readReplaySnapshot, replayStream } from "../infrastructure/replay_store"
+import { replayStream } from "../infrastructure/replay_store"
 import type { StreamPort } from "../infrastructure/stream-port"
 import { toSseChunk } from "../infrastructure/sse"
 
@@ -111,7 +111,9 @@ async function handle(
   res.end("not found")
 }
 
-// 先回放快照，再从末游标续订（SSE）。断连时清理订阅，避免泄漏。
+// 从 replay 流首订阅即「先回放历史、再续订实时」：replay 流本身就是该 session 的全量历史。
+// 统一用传输层 stream id 作续订游标——不再把领域 envelope.cursor 误当 Redis id
+// （那会让 Redis 后端 xread 收到非法 id 而静默断流；memory 后端则恰好掩盖了这个 bug）。
 async function streamSession(
   req: IncomingMessage,
   res: ServerResponse,
@@ -124,20 +126,13 @@ async function streamSession(
     connection: "keep-alive",
   })
 
-  const snapshot = await readReplaySnapshot(dependencies.streamPort, sessionId)
-  let lastCursor = ""
-  for (const event of snapshot) {
-    res.write(toSseChunk(event))
-    lastCursor = event.cursor
-  }
-
   const stream = replayStream(sessionId)
   let aborted = false
   req.on("close", () => {
     aborted = true
   })
 
-  for await (const item of dependencies.streamPort.subscribe(stream, lastCursor)) {
+  for await (const item of dependencies.streamPort.subscribe(stream)) {
     if (aborted) break
     res.write(toSseChunk(parseSessionEvent(item.event)))
   }
