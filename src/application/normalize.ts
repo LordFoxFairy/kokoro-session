@@ -103,10 +103,52 @@ export class Normalizer {
           }),
         ]
       }
-      // tool.invoked / tool.returned 暂不投影到出站 AGUI 流（v1.0.0 未定义工具事件）。
-      case "tool.invoked":
-      case "tool.returned":
-        return []
+      case "thinking.delta": {
+        return [
+          this.envelope("thinking.delta", {
+            message_id: this.messageIdFor(event.payload.message_ref),
+            delta: event.payload.text,
+          }),
+        ]
+      }
+      case "tool.invoked": {
+        return [
+          this.envelope("tool.invoked", {
+            tool_id: event.payload.tool_id,
+            name: event.payload.name,
+            args: event.payload.args,
+          }),
+        ]
+      }
+      case "tool.returned": {
+        return [
+          this.envelope("tool.returned", {
+            tool_id: event.payload.tool_id,
+            name: event.payload.name,
+            result: event.payload.result,
+          }),
+        ]
+      }
+      case "todo.updated": {
+        return [this.envelope("todo.updated", { todos: event.payload.todos })]
+      }
+      case "subagent.started": {
+        return [
+          this.envelope("subagent.started", {
+            subagent_id: event.payload.subagent_id,
+            name: event.payload.name,
+            description: event.payload.description,
+          }),
+        ]
+      }
+      case "subagent.finished": {
+        return [
+          this.envelope("subagent.finished", {
+            subagent_id: event.payload.subagent_id,
+            name: event.payload.name,
+          }),
+        ]
+      }
     }
   }
 
