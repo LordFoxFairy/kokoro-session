@@ -71,11 +71,69 @@ const runFailedPayload = z
   })
   .strict()
 
+// 活动事件族（思考 / 工具 / todo / 子智能体）：与入站 agent-events 同形，供 web 渲染。
+const thinkingDeltaPayload = z
+  .object({
+    message_id: nonEmptyString,
+    delta: z.string(),
+  })
+  .strict()
+
+const toolInvokedPayload = z
+  .object({
+    tool_id: nonEmptyString,
+    name: nonEmptyString,
+    args: z.record(z.unknown()),
+  })
+  .strict()
+
+const toolReturnedPayload = z
+  .object({
+    tool_id: nonEmptyString,
+    name: nonEmptyString,
+    result: z.string(),
+  })
+  .strict()
+
+const todoUpdatedPayload = z
+  .object({
+    todos: z.array(
+      z
+        .object({
+          content: z.string(),
+          status: z.enum(["pending", "in_progress", "completed"]),
+        })
+        .strict(),
+    ),
+  })
+  .strict()
+
+const subagentStartedPayload = z
+  .object({
+    subagent_id: nonEmptyString,
+    name: nonEmptyString,
+    description: z.string(),
+  })
+  .strict()
+
+const subagentFinishedPayload = z
+  .object({
+    subagent_id: nonEmptyString,
+    name: nonEmptyString,
+  })
+  .strict()
+
 const sessionEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("session.created"), ...envelopeFields, payload: sessionCreatedPayload }).strict(),
   z.object({ event: z.literal("run.created"), ...envelopeFields, payload: runCreatedPayload }).strict(),
   z.object({ event: z.literal("message.delta"), ...envelopeFields, payload: messageDeltaPayload }).strict(),
   z.object({ event: z.literal("message.completed"), ...envelopeFields, payload: messageCompletedPayload }).strict(),
+  z.object({ event: z.literal("thinking.delta"), ...envelopeFields, payload: thinkingDeltaPayload }).strict(),
+  z.object({ event: z.literal("tool.invoked"), ...envelopeFields, payload: toolInvokedPayload }).strict(),
+  z.object({ event: z.literal("tool.returned"), ...envelopeFields, payload: toolReturnedPayload }).strict(),
+  z.object({ event: z.literal("todo.updated"), ...envelopeFields, payload: todoUpdatedPayload }).strict(),
+  z.object({ event: z.literal("subagent.started"), ...envelopeFields, payload: subagentStartedPayload }).strict(),
+  z.object({ event: z.literal("subagent.finished"), ...envelopeFields, payload: subagentFinishedPayload }).strict(),
   z.object({ event: z.literal("run.completed"), ...envelopeFields, payload: runCompletedPayload }).strict(),
   z.object({ event: z.literal("run.failed"), ...envelopeFields, payload: runFailedPayload }).strict(),
 ])

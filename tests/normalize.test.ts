@@ -189,4 +189,105 @@ describe("Normalizer", () => {
       n.ingest({ kind: "bogus", run_id: "run_x", seq: 1, payload: {} }),
     ).toThrow()
   })
+
+  // --- activity event families (thinking / tool / todo / subagent) ---
+
+  test("tool.invoked maps to a tool.invoked envelope and parses clean", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.invoked",
+      run_id: "run_x",
+      seq: 1,
+      payload: { tool_id: "t1", name: "get_weather", args: { city: "北京" } },
+    })
+    expect(out[0]?.event).toBe("tool.invoked")
+    expect(out[0]?.payload).toMatchObject({ tool_id: "t1", name: "get_weather", args: { city: "北京" } })
+    expect(() => parseSessionEvent(out[0])).not.toThrow()
+  })
+
+  test("tool.returned maps to a tool.returned envelope", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 1,
+      payload: { tool_id: "t1", name: "get_weather", result: "北京: 晴" },
+    })
+    expect(out[0]?.event).toBe("tool.returned")
+    expect(out[0]?.payload).toMatchObject({ tool_id: "t1", name: "get_weather", result: "北京: 晴" })
+  })
+
+  test("todo.updated carries the ordered CC-style list through unchanged", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const todos = [
+      { content: "查天气", status: "completed" },
+      { content: "作答", status: "in_progress" },
+    ]
+    const out = n.ingest({ kind: "todo.updated", run_id: "run_x", seq: 1, payload: { todos } })
+    expect(out[0]?.event).toBe("todo.updated")
+    expect(out[0]?.payload.todos).toEqual(todos)
+    expect(() => parseSessionEvent(out[0])).not.toThrow()
+  })
+
+  test("subagent lifecycle maps started + finished", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const started = n.ingest({
+      kind: "subagent.started",
+      run_id: "run_x",
+      seq: 1,
+      payload: { subagent_id: "sa1", name: "researcher", description: "查资料" },
+    })
+    const finished = n.ingest({
+      kind: "subagent.finished",
+      run_id: "run_x",
+      seq: 2,
+      payload: { subagent_id: "sa1", name: "researcher" },
+    })
+    expect(started[0]?.event).toBe("subagent.started")
+    expect(started[0]?.payload).toMatchObject({ subagent_id: "sa1", name: "researcher", description: "查资料" })
+    expect(finished[0]?.event).toBe("subagent.finished")
+    expect(finished[0]?.payload).toMatchObject({ subagent_id: "sa1", name: "researcher" })
+  })
+
+  test("thinking.delta maps to a thinking.delta envelope with a message_id", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "thinking.delta",
+      run_id: "run_x",
+      seq: 1,
+      payload: { message_ref: "t1", text: "我在推理" },
+    })
+    expect(out[0]?.event).toBe("thinking.delta")
+    expect(out[0]?.payload).toMatchObject({ delta: "我在推理" })
+    expect(typeof out[0]?.payload.message_id).toBe("string")
+  })
+
+  test("schema collapse: tool.invoked with an extra key throws", () => {
+    const n = makeNormalizer()
+    expect(() =>
+      n.ingest({
+        kind: "tool.invoked",
+        run_id: "run_x",
+        seq: 1,
+        payload: { tool_id: "t", name: "x", args: {}, extra: 1 },
+      }),
+    ).toThrow()
+  })
+
+  test("schema collapse: todo.updated with an unknown status throws", () => {
+    const n = makeNormalizer()
+    expect(() =>
+      n.ingest({
+        kind: "todo.updated",
+        run_id: "run_x",
+        seq: 1,
+        payload: { todos: [{ content: "x", status: "done" }] },
+      }),
+    ).toThrow()
+  })
 })
