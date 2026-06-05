@@ -84,14 +84,11 @@ export class MemoryStreamPort implements StreamPort {
 // Redis Streams：xadd 写入（游标=条目 id），xrange 取全量，xread BLOCK 续订。
 export class RedisStreamPort implements StreamPort {
   private readonly redis: Redis
-  private readonly blocking: Redis
 
   constructor(url: string) {
     this.redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
-    this.blocking = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
     // 探测连接失败时 ioredis 会发 error 事件；吞掉以免污染测试输出（调用方靠 ping() 抛错判活）。
     this.redis.on("error", () => {})
-    this.blocking.on("error", () => {})
   }
 
   async ping(): Promise<void> {
@@ -119,30 +116,32 @@ export class RedisStreamPort implements StreamPort {
     stream: string,
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
-    await this.ensureConnected(this.blocking)
-    // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
-    let lastId = fromCursor || "0-0"
-    while (true) {
-      const result = await this.blocking.xread(
-        "BLOCK",
-        1000,
-        "STREAMS",
-        stream,
-        lastId,
-      )
-      if (!result) continue
-      for (const [, entries] of result) {
-        for (const [cursor, fields] of entries) {
-          lastId = cursor
-          yield { cursor, event: decodeFields(fields) }
+    // 每个订阅独占一条连接：BLOCK xread 会霸占连接，若共享一条，则 dispatch 循环、
+    // 各 run 的 relay 与多个 SSE /stream 会互相饿死、最终把端点拖死。用完即断。
+    const conn = this.redis.duplicate()
+    conn.on("error", () => {})
+    try {
+      await this.ensureConnected(conn)
+      // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
+      let lastId = fromCursor || "0-0"
+      while (true) {
+        const result = await conn.xread("BLOCK", 1000, "STREAMS", stream, lastId)
+        if (!result) continue
+        for (const [, entries] of result) {
+          for (const [cursor, fields] of entries) {
+            lastId = cursor
+            yield { cursor, event: decodeFields(fields) }
+          }
         }
       }
+    } finally {
+      // 消费方停止迭代（SSE 断开 / dispatch 收束）时归还连接，避免连接泄漏。
+      conn.disconnect()
     }
   }
 
   async close(): Promise<void> {
     this.redis.disconnect()
-    this.blocking.disconnect()
   }
 
   private async ensureConnected(client: Redis): Promise<void> {
