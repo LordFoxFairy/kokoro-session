@@ -81,6 +81,7 @@ const thinkingDeltaPayload = z
 
 const toolInvokedPayload = z
   .object({
+    message_id: nonEmptyString,
     tool_id: nonEmptyString,
     name: nonEmptyString,
     args: z.record(z.unknown()),
@@ -89,6 +90,7 @@ const toolInvokedPayload = z
 
 const toolReturnedPayload = z
   .object({
+    message_id: nonEmptyString,
     tool_id: nonEmptyString,
     name: nonEmptyString,
     result: z.string(),
@@ -110,16 +112,38 @@ const todoUpdatedPayload = z
 
 const subagentStartedPayload = z
   .object({
+    message_id: nonEmptyString,
     subagent_id: nonEmptyString,
     name: nonEmptyString,
     description: z.string(),
+    subagent_type: nonEmptyString,
+    source: z.enum(["built-in", "config-custom", "runtime-custom"]),
   })
   .strict()
 
 const subagentFinishedPayload = z
   .object({
+    message_id: nonEmptyString,
     subagent_id: nonEmptyString,
     name: nonEmptyString,
+    subagent_type: nonEmptyString,
+    source: z.enum(["built-in", "config-custom", "runtime-custom"]),
+  })
+  .strict()
+
+const subagentTextDeltaPayload = z
+  .object({
+    message_id: nonEmptyString,
+    subagent_id: nonEmptyString,
+    text: z.string(),
+  })
+  .strict()
+
+const subagentTextCompletedPayload = z
+  .object({
+    message_id: nonEmptyString,
+    subagent_id: nonEmptyString,
+    text: z.string(),
   })
   .strict()
 
@@ -134,6 +158,8 @@ const sessionEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("todo.updated"), ...envelopeFields, payload: todoUpdatedPayload }).strict(),
   z.object({ event: z.literal("subagent.started"), ...envelopeFields, payload: subagentStartedPayload }).strict(),
   z.object({ event: z.literal("subagent.finished"), ...envelopeFields, payload: subagentFinishedPayload }).strict(),
+  z.object({ event: z.literal("subagent.text.delta"), ...envelopeFields, payload: subagentTextDeltaPayload }).strict(),
+  z.object({ event: z.literal("subagent.text.completed"), ...envelopeFields, payload: subagentTextCompletedPayload }).strict(),
   z.object({ event: z.literal("run.completed"), ...envelopeFields, payload: runCompletedPayload }).strict(),
   z.object({ event: z.literal("run.failed"), ...envelopeFields, payload: runFailedPayload }).strict(),
 ])

@@ -124,9 +124,22 @@ describe("runRequestSchema", () => {
       session_id: "ses_01",
       conversation_id: "conv_01",
       input: "hello",
-      execution_style: "fast",
+      execution_style: "thinking",
     })
-    expect(parsed.execution_style).toBe("fast")
+    expect(parsed.execution_style).toBe("thinking")
+  })
+
+  test("rejects execution_style outside fast/thinking", () => {
+    expect(() =>
+      runRequestSchema.parse({
+        kind: "run.request",
+        run_id: "run_01",
+        session_id: "ses_01",
+        conversation_id: "conv_01",
+        input: "hello",
+        execution_style: "default",
+      }),
+    ).toThrow()
   })
 
   test("requires input", () => {
