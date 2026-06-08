@@ -49,4 +49,17 @@ describe("RedisStreamPort", () => {
     }
     expect(seen).toEqual([{ n: 2 }])
   })
+
+  itOrSkip("allows a custom block polling interval", async () => {
+    const custom = new RedisStreamPort(REDIS_URL, { blockMs: 25 })
+    try {
+      await custom.ping()
+      const stream = `kokoro:test:${Date.now()}:c`
+      await custom.publish(stream, { n: 1 })
+      const items = await custom.readAll(stream)
+      expect(items[0]?.event).toEqual({ n: 1 })
+    } finally {
+      await custom.close()
+    }
+  })
 })

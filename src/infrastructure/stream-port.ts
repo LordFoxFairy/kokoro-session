@@ -2,6 +2,11 @@ import { Redis } from "ioredis"
 
 // StreamPort：可插拔的跨进程事件流抽象（memory | redis）。
 // 与 Python 侧契约镜像：publish 返回单调游标；subscribe(fromCursor) 续订；readAll 取全量快照。
+// 这三个常量是 Python/TypeScript 共享的 transport contract，不能随意漂移。
+const CURSOR_WIDTH = 20
+const REDIS_FIELD = "data"
+const DEFAULT_BLOCK_MS = 1000
+
 export type StreamItem = {
   cursor: string
   event: unknown
@@ -20,9 +25,14 @@ export class MemoryStreamPort implements StreamPort {
   private readonly streams = new Map<string, StreamItem[]>()
   private readonly waiters = new Map<string, Array<() => void>>()
   private counter = 0
+  private readonly cursorWidth: number
+
+  constructor(options?: { cursorWidth?: number }) {
+    this.cursorWidth = options?.cursorWidth ?? CURSOR_WIDTH
+  }
 
   async publish(stream: string, event: unknown): Promise<string> {
-    const cursor = String(++this.counter).padStart(20, "0")
+    const cursor = String(++this.counter).padStart(this.cursorWidth, "0")
     const items = this.streams.get(stream) ?? []
     items.push({ cursor, event })
     this.streams.set(stream, items)
@@ -84,9 +94,11 @@ export class MemoryStreamPort implements StreamPort {
 // Redis Streams：xadd 写入（游标=条目 id），xrange 取全量，xread BLOCK 续订。
 export class RedisStreamPort implements StreamPort {
   private readonly redis: Redis
+  private readonly blockMs: number
 
-  constructor(url: string) {
+  constructor(url: string, options?: { blockMs?: number }) {
     this.redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
+    this.blockMs = options?.blockMs ?? DEFAULT_BLOCK_MS
     // 探测连接失败时 ioredis 会发 error 事件；吞掉以免污染测试输出（调用方靠 ping() 抛错判活）。
     this.redis.on("error", () => {})
   }
@@ -98,7 +110,7 @@ export class RedisStreamPort implements StreamPort {
 
   async publish(stream: string, event: unknown): Promise<string> {
     await this.ensureConnected(this.redis)
-    const id = await this.redis.xadd(stream, "*", "data", JSON.stringify(event))
+    const id = await this.redis.xadd(stream, "*", REDIS_FIELD, JSON.stringify(event))
     if (!id) throw new Error("redis xadd returned no id")
     return id
   }
@@ -125,7 +137,7 @@ export class RedisStreamPort implements StreamPort {
       // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
       let lastId = fromCursor || "0-0"
       while (true) {
-        const result = await conn.xread("BLOCK", 1000, "STREAMS", stream, lastId)
+        const result = await conn.xread("BLOCK", this.blockMs, "STREAMS", stream, lastId)
         if (!result) continue
         for (const [, entries] of result) {
           for (const [cursor, fields] of entries) {
@@ -153,7 +165,7 @@ export class RedisStreamPort implements StreamPort {
 }
 
 function decodeFields(fields: string[]): unknown {
-  const idx = fields.indexOf("data")
+  const idx = fields.indexOf(REDIS_FIELD)
   if (idx < 0 || idx + 1 >= fields.length) return null
   const raw = fields[idx + 1]
   if (raw === undefined) return null

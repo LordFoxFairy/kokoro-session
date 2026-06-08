@@ -29,6 +29,7 @@ const runFailedPayload = z
 // 工具事件：tool_id 关联 invoked/returned；args 任意结构，result 文本化。
 const toolInvokedPayload = z
   .object({
+    message_ref: z.string().min(1),
     tool_id: z.string().min(1),
     name: z.string().min(1),
     args: z.record(z.unknown()),
@@ -37,6 +38,7 @@ const toolInvokedPayload = z
 
 const toolReturnedPayload = z
   .object({
+    message_ref: z.string().min(1),
     tool_id: z.string().min(1),
     name: z.string().min(1),
     result: z.string(),
@@ -59,16 +61,22 @@ const todoUpdatedPayload = z
 
 const subagentStartedPayload = z
   .object({
+    message_ref: z.string().min(1),
     subagent_id: z.string().min(1),
     name: z.string().min(1),
     description: z.string(),
+    subagent_type: z.string().min(1),
+    source: z.enum(["built-in", "config-custom", "runtime-custom"]),
   })
   .strict()
 
 const subagentFinishedPayload = z
   .object({
+    message_ref: z.string().min(1),
     subagent_id: z.string().min(1),
     name: z.string().min(1),
+    subagent_type: z.string().min(1),
+    source: z.enum(["built-in", "config-custom", "runtime-custom"]),
   })
   .strict()
 
@@ -86,6 +94,18 @@ export const agentEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("todo.updated"), run_id: runId, seq, payload: todoUpdatedPayload }).strict(),
   z.object({ kind: z.literal("subagent.started"), run_id: runId, seq, payload: subagentStartedPayload }).strict(),
   z.object({ kind: z.literal("subagent.finished"), run_id: runId, seq, payload: subagentFinishedPayload }).strict(),
+  z.object({
+    kind: z.literal("subagent.text.delta"),
+    run_id: runId,
+    seq,
+    payload: z.object({ message_ref: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
+  }).strict(),
+  z.object({
+    kind: z.literal("subagent.text.completed"),
+    run_id: runId,
+    seq,
+    payload: z.object({ message_ref: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
+  }).strict(),
   z.object({ kind: z.literal("run.completed"), run_id: runId, seq, payload: runCompletedPayload }).strict(),
   z.object({ kind: z.literal("run.failed"), run_id: runId, seq, payload: runFailedPayload }).strict(),
 ])
@@ -100,7 +120,7 @@ export const runRequestSchema = z
     session_id: z.string().min(1),
     conversation_id: z.string().min(1),
     input: z.string().min(1),
-    execution_style: z.string().min(1).optional(),
+    execution_style: z.enum(["fast", "thinking"]).optional(),
   })
   .strict()
 

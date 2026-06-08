@@ -199,10 +199,24 @@ describe("Normalizer", () => {
       kind: "tool.invoked",
       run_id: "run_x",
       seq: 1,
-      payload: { tool_id: "t1", name: "get_weather", args: { city: "北京" } },
+      payload: {
+        message_ref: "m1",
+        tool_id: "t1",
+        name: "get_weather",
+        args: { city: "北京" },
+      },
     })
     expect(out[0]?.event).toBe("tool.invoked")
-    expect(out[0]?.payload).toMatchObject({ tool_id: "t1", name: "get_weather", args: { city: "北京" } })
+    const invokedPayload = out[0]?.payload as {
+      message_id: string
+      tool_id: string
+      name: string
+      args: { city: string }
+    }
+    expect(typeof invokedPayload.message_id).toBe("string")
+    expect(invokedPayload.tool_id).toBe("t1")
+    expect(invokedPayload.name).toBe("get_weather")
+    expect(invokedPayload.args).toEqual({ city: "北京" })
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
@@ -213,10 +227,24 @@ describe("Normalizer", () => {
       kind: "tool.returned",
       run_id: "run_x",
       seq: 1,
-      payload: { tool_id: "t1", name: "get_weather", result: "北京: 晴" },
+      payload: {
+        message_ref: "m1",
+        tool_id: "t1",
+        name: "get_weather",
+        result: "北京: 晴",
+      },
     })
     expect(out[0]?.event).toBe("tool.returned")
-    expect(out[0]?.payload).toMatchObject({ tool_id: "t1", name: "get_weather", result: "北京: 晴" })
+    const returnedPayload = out[0]?.payload as {
+      message_id: string
+      tool_id: string
+      name: string
+      result: string
+    }
+    expect(typeof returnedPayload.message_id).toBe("string")
+    expect(returnedPayload.tool_id).toBe("t1")
+    expect(returnedPayload.name).toBe("get_weather")
+    expect(returnedPayload.result).toBe("北京: 晴")
   })
 
   test("todo.updated carries the ordered CC-style list through unchanged", () => {
@@ -239,18 +267,69 @@ describe("Normalizer", () => {
       kind: "subagent.started",
       run_id: "run_x",
       seq: 1,
-      payload: { subagent_id: "sa1", name: "researcher", description: "查资料" },
+      payload: {
+        message_ref: "m1",
+        subagent_id: "sa1",
+        name: "researcher",
+        description: "查资料",
+        subagent_type: "researcher",
+        source: "built-in",
+      },
     })
     const finished = n.ingest({
       kind: "subagent.finished",
       run_id: "run_x",
       seq: 2,
-      payload: { subagent_id: "sa1", name: "researcher" },
+      payload: {
+        message_ref: "m1",
+        subagent_id: "sa1",
+        name: "researcher",
+        subagent_type: "researcher",
+        source: "built-in",
+      },
     })
     expect(started[0]?.event).toBe("subagent.started")
-    expect(started[0]?.payload).toMatchObject({ subagent_id: "sa1", name: "researcher", description: "查资料" })
+    const startedPayload = started[0]?.payload as {
+      message_id: string
+      subagent_id: string
+      name: string
+      description: string
+      subagent_type: string
+      source: string
+    }
+    expect(typeof startedPayload.message_id).toBe("string")
+    expect(startedPayload.subagent_id).toBe("sa1")
+    expect(startedPayload.name).toBe("researcher")
+    expect(startedPayload.description).toBe("查资料")
+    expect(startedPayload.subagent_type).toBe("researcher")
+    expect(startedPayload.source).toBe("built-in")
     expect(finished[0]?.event).toBe("subagent.finished")
-    expect(finished[0]?.payload).toMatchObject({ subagent_id: "sa1", name: "researcher" })
+    const finishedPayload = finished[0]?.payload as {
+      message_id: string
+      subagent_id: string
+      name: string
+      subagent_type: string
+      source: string
+    }
+    expect(typeof finishedPayload.message_id).toBe("string")
+    expect(finishedPayload.subagent_id).toBe("sa1")
+    expect(finishedPayload.name).toBe("researcher")
+    expect(finishedPayload.subagent_type).toBe("researcher")
+    expect(finishedPayload.source).toBe("built-in")
+  })
+
+  test("subagent text maps to subagent text envelopes with message_id + subagent_id", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "subagent.text.completed",
+      run_id: "run_x",
+      seq: 1,
+      payload: { message_ref: "m1", subagent_id: "sa1", text: "子智能体结论" },
+    })
+    expect(out[0]?.event).toBe("subagent.text.completed")
+    expect(out[0]?.payload).toMatchObject({ subagent_id: "sa1", text: "子智能体结论" })
+    expect(typeof out[0]?.payload.message_id).toBe("string")
   })
 
   test("thinking.delta maps to a thinking.delta envelope with a message_id", () => {

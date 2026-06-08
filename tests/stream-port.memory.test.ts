@@ -74,4 +74,10 @@ describe("MemoryStreamPort", () => {
     expect((await port.readAll("a")).map((e) => e.event)).toEqual([{ x: 1 }])
     expect((await port.readAll("b")).map((e) => e.event)).toEqual([{ y: 2 }])
   })
+
+  test("allows a custom cursor width", async () => {
+    const port = new MemoryStreamPort({ cursorWidth: 6 })
+    const cursor = await port.publish(STREAM, { n: 1 })
+    expect(cursor).toBe("000001")
+  })
 })

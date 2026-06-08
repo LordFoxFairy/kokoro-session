@@ -43,7 +43,9 @@ export async function startRun(
     session_id: input.sessionId,
     conversation_id: conversationId,
     input: input.input,
-    ...(input.executionStyle ? { execution_style: input.executionStyle } : {}),
+    ...(input.executionStyle !== undefined
+      ? { execution_style: input.executionStyle }
+      : {}),
   })
 
   await dependencies.streamPort.publish(REQUESTS_STREAM, request)

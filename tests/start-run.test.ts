@@ -48,6 +48,13 @@ describe("startRun", () => {
     expect(parsed.execution_style).toBeUndefined()
   })
 
+  test("fails loud on an empty executionStyle instead of silently dropping it", async () => {
+    const streamPort = new MemoryStreamPort()
+    await expect(
+      startRun({ sessionId: "ses_03", input: "hi", executionStyle: "" }, { streamPort }),
+    ).rejects.toThrow()
+  })
+
   test("each run gets a distinct run id", async () => {
     const streamPort = new MemoryStreamPort()
     const a = await startRun({ sessionId: "ses_03", input: "a" }, { streamPort })

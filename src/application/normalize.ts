@@ -114,6 +114,7 @@ export class Normalizer {
       case "tool.invoked": {
         return [
           this.envelope("tool.invoked", {
+            message_id: this.messageIdFor(event.payload.message_ref),
             tool_id: event.payload.tool_id,
             name: event.payload.name,
             args: event.payload.args,
@@ -123,6 +124,7 @@ export class Normalizer {
       case "tool.returned": {
         return [
           this.envelope("tool.returned", {
+            message_id: this.messageIdFor(event.payload.message_ref),
             tool_id: event.payload.tool_id,
             name: event.payload.name,
             result: event.payload.result,
@@ -135,17 +137,41 @@ export class Normalizer {
       case "subagent.started": {
         return [
           this.envelope("subagent.started", {
+            message_id: this.messageIdFor(event.payload.message_ref),
             subagent_id: event.payload.subagent_id,
             name: event.payload.name,
             description: event.payload.description,
+            subagent_type: event.payload.subagent_type,
+            source: event.payload.source,
           }),
         ]
       }
       case "subagent.finished": {
         return [
           this.envelope("subagent.finished", {
+            message_id: this.messageIdFor(event.payload.message_ref),
             subagent_id: event.payload.subagent_id,
             name: event.payload.name,
+            subagent_type: event.payload.subagent_type,
+            source: event.payload.source,
+          }),
+        ]
+      }
+      case "subagent.text.delta": {
+        return [
+          this.envelope("subagent.text.delta", {
+            message_id: this.messageIdFor(event.payload.message_ref),
+            subagent_id: event.payload.subagent_id,
+            text: event.payload.text,
+          }),
+        ]
+      }
+      case "subagent.text.completed": {
+        return [
+          this.envelope("subagent.text.completed", {
+            message_id: this.messageIdFor(event.payload.message_ref),
+            subagent_id: event.payload.subagent_id,
+            text: event.payload.text,
           }),
         ]
       }
