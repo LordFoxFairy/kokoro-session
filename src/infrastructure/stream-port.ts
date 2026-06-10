@@ -7,7 +7,6 @@ const CURSOR_WIDTH = 20
 const REDIS_FIELD = "data"
 const DEFAULT_BLOCK_MS = 1000
 
-// ── Memory adapter ────────────────────────────────────────────────────────
 // 进程内单机用：自增序号当游标，等待者用一组 resolver 唤醒，避免忙等轮询。
 export class MemoryStreamPort implements StreamPort {
   private readonly streams = new Map<string, StreamItem[]>()
@@ -78,7 +77,6 @@ export class MemoryStreamPort implements StreamPort {
   }
 }
 
-// ── Redis adapter ─────────────────────────────────────────────────────────
 // Redis Streams：xadd 写入（游标=条目 id），xrange 取全量，xread BLOCK 续订。
 export class RedisStreamPort implements StreamPort {
   private readonly redis: Redis
