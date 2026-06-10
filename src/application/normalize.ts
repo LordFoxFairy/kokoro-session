@@ -1,5 +1,5 @@
-import { agentEventSchema, type AgentEvent } from "../domain/agent-events"
-import { parseSessionEvent, type SessionEvent } from "../domain/events"
+import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
+import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 
 // Normalizer：把原始 agent 事件归一化成 AGUI 信封。
 // 绑定 (session_id, conversation_id, run_id)；注入 id 工厂 + clock 以便测试确定性。

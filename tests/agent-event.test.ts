@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { agentEventSchema, runRequestSchema } from "../src/domain/agent-events"
+import { agentEventSchema, runRequestSchema } from "../src/domain/agent-event"
 
 describe("agentEventSchema", () => {
   test("accepts a well-formed run.started event", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { parseSessionEvent } from "../src/domain/events"
+import { parseSessionEvent } from "../src/domain/session-event"
 
 const BINDING = {
   sessionId: "ses_01",
