@@ -123,5 +123,3 @@ export const runRequestSchema = z
     execution_style: z.enum(["fast", "thinking"]).optional(),
   })
   .strict()
-
-export type RunRequest = z.infer<typeof runRequestSchema>
