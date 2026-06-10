@@ -1,5 +1,5 @@
 import type { StreamPort } from "../infrastructure/stream-port"
-import type { ReplayStore } from "../infrastructure/replay_store"
+import type { ReplayStore } from "../infrastructure/replay-store"
 
 // 应用层端口聚合，方便接口层注入。
 export type { StreamPort, ReplayStore }

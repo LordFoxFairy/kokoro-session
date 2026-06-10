@@ -3,8 +3,8 @@ import type { AddressInfo } from "node:net"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { relayRun, runEventsStream, startRun } from "../src/application/start_run"
-import { makeReplayStore } from "../src/infrastructure/replay_store"
+import { relayRun, runEventsStream, startRun } from "../src/application/start-run"
+import { makeReplayStore } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 import { buildServer } from "../src/interfaces/http"
 

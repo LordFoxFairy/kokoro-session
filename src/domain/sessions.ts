@@ -1,1 +1,1 @@
-export type { StartRunInput } from "../application/start_run"
+export type { StartRunInput } from "../application/start-run"

@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
-import { startRun } from "../application/start_run"
+import { startRun } from "../application/start-run"
 import { parseSessionEvent } from "../domain/events"
-import type { ReplayStore } from "../infrastructure/replay_store"
-import { replayStream } from "../infrastructure/replay_store"
+import type { ReplayStore } from "../infrastructure/replay-store"
+import { replayStream } from "../infrastructure/replay-store"
 import type { StreamPort } from "../infrastructure/stream-port"
 import { toSseChunk } from "../infrastructure/sse"
 
