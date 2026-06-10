@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun, REQUESTS_STREAM, runEventsStream, startRun } from "../src/application/start-run"
-import { runRequestSchema } from "../src/domain/agent-events"
+import { runRequestSchema } from "../src/domain/agent-event"
 import { memoryReplayStore } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 

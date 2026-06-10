@@ -1,6 +1,6 @@
 import { Normalizer } from "./application/normalize"
 import { relayRun, REQUESTS_STREAM } from "./application/start-run"
-import { runRequestSchema } from "./domain/agent-events"
+import { runRequestSchema } from "./domain/agent-event"
 import { makeReplayStore } from "./infrastructure/replay-store"
 import { makeStreamPort } from "./infrastructure/stream-port"
 import { buildServer } from "./interfaces/http"

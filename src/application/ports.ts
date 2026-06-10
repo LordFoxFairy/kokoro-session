@@ -1,4 +1,4 @@
-import type { SessionEvent } from "../domain/events"
+import type { SessionEvent } from "../domain/session-event"
 
 // 应用层拥有的端口契约：接口定义在上层，infrastructure 提供实现（依赖倒置）。
 

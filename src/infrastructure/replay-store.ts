@@ -1,5 +1,5 @@
 import type { ReplayStore, StreamPort } from "../application/ports"
-import type { SessionEvent } from "../domain/events"
+import type { SessionEvent } from "../domain/session-event"
 import { MemoryStreamPort } from "./stream-port"
 
 // ReplayStore 契约见 application/ports；这里是 StreamPort 背书的实现。

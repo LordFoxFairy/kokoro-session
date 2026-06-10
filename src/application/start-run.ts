@@ -1,4 +1,4 @@
-import { runRequestSchema } from "../domain/agent-events"
+import { runRequestSchema } from "../domain/agent-event"
 import type { ReplayStore, StreamPort } from "./ports"
 import type { Normalizer } from "./normalize"
 
