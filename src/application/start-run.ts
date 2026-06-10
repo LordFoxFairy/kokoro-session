@@ -1,7 +1,5 @@
 import { runRequestSchema } from "../domain/agent-events"
-import type { ReplayStore } from "../infrastructure/replay-store"
-import type { StreamPort } from "../infrastructure/stream-port"
-import type { RunIdFactory } from "./ports"
+import type { ReplayStore, RunIdFactory, StreamPort } from "./ports"
 import type { Normalizer } from "./normalize"
 
 // session 不再 HTTP 同步调 agent：生成 run_id，把合法 run.request 发到请求流，

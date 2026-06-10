@@ -1,12 +1,9 @@
+import type { ReplayStore, StreamPort } from "../application/ports"
 import type { SessionEvent } from "../domain/events"
-import { MemoryStreamPort, type StreamPort } from "./stream-port"
+import { MemoryStreamPort } from "./stream-port"
 
-// Replay store：会话级 AGUI 事件的持久回放，由 StreamPort 背书（memory/redis 可换）。
+// ReplayStore 契约见 application/ports；这里是 StreamPort 背书的实现。
 // 每个 session 一条流 kokoro:session:{id}:replay。
-export interface ReplayStore {
-  append(sessionId: string, events: SessionEvent[]): Promise<void> | void
-  read(sessionId: string): SessionEvent[]
-}
 
 export function replayStream(sessionId: string): string {
   return `kokoro:session:${sessionId}:replay`
