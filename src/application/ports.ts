@@ -21,8 +21,3 @@ export interface ReplayStore {
   append(sessionId: string, events: SessionEvent[]): Promise<void> | void
   read(sessionId: string): SessionEvent[]
 }
-
-// run_id 生成器：可注入以便测试确定性。
-export interface RunIdFactory {
-  (): string
-}

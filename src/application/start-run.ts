@@ -1,6 +1,9 @@
 import { runRequestSchema } from "../domain/agent-events"
-import type { ReplayStore, RunIdFactory, StreamPort } from "./ports"
+import type { ReplayStore, StreamPort } from "./ports"
 import type { Normalizer } from "./normalize"
+
+// run_id 生成器：可注入以便测试确定性（start-run 的测试 seam，非被 infra 实现的端口）。
+type RunIdFactory = () => string
 
 // session 不再 HTTP 同步调 agent：生成 run_id，把合法 run.request 发到请求流，
 // agent worker 消费后把原始事件回写到 run 事件流，由 relayRun 归一化进 replay。
