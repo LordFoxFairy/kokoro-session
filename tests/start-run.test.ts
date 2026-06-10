@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { relayRun, REQUESTS_STREAM, runEventsStream, startRun } from "../src/application/start_run"
+import { relayRun, REQUESTS_STREAM, runEventsStream, startRun } from "../src/application/start-run"
 import { runRequestSchema } from "../src/domain/agent-events"
-import { memoryReplayStore } from "../src/infrastructure/replay_store"
+import { memoryReplayStore } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 
 describe("startRun", () => {

@@ -1,5 +1,5 @@
 import { runRequestSchema } from "../domain/agent-events"
-import type { ReplayStore } from "../infrastructure/replay_store"
+import type { ReplayStore } from "../infrastructure/replay-store"
 import type { StreamPort } from "../infrastructure/stream-port"
 import type { RunIdFactory } from "./ports"
 import type { Normalizer } from "./normalize"
