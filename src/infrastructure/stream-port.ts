@@ -1,23 +1,11 @@
 import { Redis } from "ioredis"
 
-// StreamPort：可插拔的跨进程事件流抽象（memory | redis）。
-// 与 Python 侧契约镜像：publish 返回单调游标；subscribe(fromCursor) 续订；readAll 取全量快照。
+import type { StreamItem, StreamPort } from "../application/ports"
+
 // 这三个常量是 Python/TypeScript 共享的 transport contract，不能随意漂移。
 const CURSOR_WIDTH = 20
 const REDIS_FIELD = "data"
 const DEFAULT_BLOCK_MS = 1000
-
-export type StreamItem = {
-  cursor: string
-  event: unknown
-}
-
-export interface StreamPort {
-  publish(stream: string, event: unknown): Promise<string>
-  readAll(stream: string): Promise<StreamItem[]>
-  subscribe(stream: string, fromCursor?: string): AsyncIterable<StreamItem>
-  close(): Promise<void>
-}
 
 // ── Memory adapter ────────────────────────────────────────────────────────
 // 进程内单机用：自增序号当游标，等待者用一组 resolver 唤醒，避免忙等轮询。
