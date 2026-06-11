@@ -169,5 +169,5 @@ const sessionEventSchema = z.discriminatedUnion("event", [
 
 // session 侧严格校验当前实际发出的 AGUI 事件族，避免把脏事件写入 replay 或 SSE。
 export function parseSessionEvent(input: unknown): SessionEvent {
-  return sessionEventSchema.parse(input) as SessionEvent
+  return sessionEventSchema.parse(input)
 }
