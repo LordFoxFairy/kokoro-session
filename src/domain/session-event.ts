@@ -62,7 +62,7 @@ const messageCompletedPayload = z
 const runCompletedPayload = z
   .object({
     run_id: nonEmptyString,
-    status: nonEmptyString,
+    status: z.enum(["completed", "cancelled", "timeout"]),
   })
   .strict()
 

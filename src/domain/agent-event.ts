@@ -15,7 +15,7 @@ const textPayload = z
 
 const runCompletedPayload = z
   .object({
-    status: z.string().min(1),
+    status: z.enum(["completed", "cancelled", "timeout"]),
   })
   .strict()
 
