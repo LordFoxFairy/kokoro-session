@@ -41,15 +41,16 @@ export class Normalizer {
     }
     this.seenSeqs.add(event.seq)
 
-    const out = this.mapEvent(event)
-    // 出站自检：每个信封必须通过 AGUI 解析器（必填字段齐全）。
-    return out.map((envelope) => parseSessionEvent(envelope))
+    // 出站自检：每个信封过 AGUI 解析器；并透传该 agent 事件的 seq（含 run.started 合成的两条）。
+    return this.mapEvent(event).map((envelope) =>
+      parseSessionEvent({ ...envelope, seq: event.seq }),
+    )
   }
 
-  private mapEvent(event: AgentEvent): SessionEvent[] {
+  private mapEvent(event: AgentEvent): Omit<SessionEvent, "seq">[] {
     switch (event.kind) {
       case "run.started": {
-        const envelopes: SessionEvent[] = []
+        const envelopes: Omit<SessionEvent, "seq">[] = []
         if (!this.sessionCreated) {
           this.sessionCreated = true
           envelopes.push(
@@ -193,7 +194,7 @@ export class Normalizer {
   private envelope(
     event: SessionEvent["event"],
     payload: Record<string, unknown>,
-  ): SessionEvent {
+  ): Omit<SessionEvent, "seq"> {
     const cursor = `${this.binding.runId}:${String(++this.cursorSeq).padStart(4, "0")}`
     return {
       event,

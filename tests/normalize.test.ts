@@ -54,6 +54,7 @@ describe("Normalizer", () => {
       parseSessionEvent({
         event: "run.created",
         event_id: "evt_0002",
+        seq: 2,
         session_id: "ses_01",
         conversation_id: "conv_01",
         run_id: "run_x",
@@ -69,6 +70,7 @@ describe("Normalizer", () => {
       parseSessionEvent({
         event: "session.created",
         event_id: "evt_0001",
+        seq: 1,
         session_id: "ses_01",
         conversation_id: "conv_01",
         run_id: "run_x",
@@ -166,6 +168,21 @@ describe("Normalizer", () => {
     const sorted = [...cursors].sort()
     expect(cursors).toEqual(sorted)
     expect(new Set(cursors).size).toBe(cursors.length)
+  })
+
+  test("envelope carries the agent event's seq as a first-class field", () => {
+    const n = makeNormalizer()
+    // run.started 合成 session.created + run.created 两条，共享 run.started 的 seq。
+    const started = n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    expect(started.map((e) => e.seq)).toEqual([0, 0])
+    // 后续事件各自透传 agent 的 seq（不再靠 cursor 末段反解）。
+    const delta = n.ingest({
+      kind: "text.delta",
+      run_id: "run_x",
+      seq: 7,
+      payload: { message_ref: "m1", text: "hi" },
+    })
+    expect(delta[0]?.seq).toBe(7)
   })
 
   test("idempotent: same (run_id, seq) fed twice produces output only once", () => {
