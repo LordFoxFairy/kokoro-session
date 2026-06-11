@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun, runEventsStream, startRun } from "../src/application/start-run"
-import { makeReplayStore } from "../src/infrastructure/replay-store"
+import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 import { buildServer } from "../src/interfaces/http"
 
@@ -96,8 +96,8 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("event: message.delta")
     expect(text).toContain("event: run.completed")
     expect(text).toContain('"title":"ses_sse"')
-    // SSE 三行结构：id / event / data。
-    expect(text).toMatch(/id: run_[^\n]*\nevent: session\.created\ndata: \{/)
+    // SSE 三行结构：id / event / data。id 用 replay 流 transport cursor（数字），非域 cursor。
+    expect(text).toMatch(/id: \d+\nevent: session\.created\ndata: \{/)
   })
 
   // 回归：非空快照后必须继续续订实时事件。旧实现把领域 envelope.cursor 当作续订游标，
@@ -160,6 +160,162 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("event: message.delta") // 实时续订（旧实现在此断流）
     expect(text).toContain("event: run.completed")
   })
+
+  test("SSE id line carries the replay transport cursor, not the domain envelope cursor", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const sessionId = "ses_id"
+    const runId = "run_id"
+    const base = {
+      session_id: sessionId,
+      conversation_id: sessionId,
+      run_id: runId,
+      timestamp: "2026-05-30T00:00:00.000Z",
+    }
+    await deps.replayStore.append(sessionId, [
+      {
+        event: "session.created",
+        event_id: "evt_1",
+        ...base,
+        cursor: `${runId}:0001`,
+        payload: {
+          session_id: sessionId,
+          conversation_id: sessionId,
+          owner_id: "agent",
+          title: sessionId,
+        },
+      },
+      {
+        event: "run.completed",
+        event_id: "evt_2",
+        ...base,
+        cursor: `${runId}:0002`,
+        payload: { run_id: runId, status: "completed" },
+      },
+    ])
+    const transportCursors = (
+      await deps.streamPort.readAll(replayStream(sessionId))
+    ).map((item) => item.cursor)
+
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(2000),
+    })
+    const text = await readSomeSse(res)
+
+    // SSE id = replay 流 transport cursor（全局单调、可作续点），而非 per-run 域 cursor。
+    expect(text).toContain(`id: ${transportCursors[0]}`)
+    expect(text).not.toContain(`id: ${runId}:0001`)
+  })
+
+  test("resumes from a transport-cursor Last-Event-ID, skipping already-delivered events", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const sessionId = "ses_resume"
+    const runId = "run_resume"
+    const base = {
+      session_id: sessionId,
+      conversation_id: sessionId,
+      run_id: runId,
+      timestamp: "2026-05-30T00:00:00.000Z",
+    }
+    await deps.replayStore.append(sessionId, [
+      {
+        event: "session.created",
+        event_id: "evt_1",
+        ...base,
+        cursor: `${runId}:0001`,
+        payload: {
+          session_id: sessionId,
+          conversation_id: sessionId,
+          owner_id: "agent",
+          title: sessionId,
+        },
+      },
+      {
+        event: "message.delta",
+        event_id: "evt_2",
+        ...base,
+        cursor: `${runId}:0002`,
+        payload: { message_id: `${runId}:m1`, delta: "hi", role: "assistant" },
+      },
+      {
+        event: "run.completed",
+        event_id: "evt_3",
+        ...base,
+        cursor: `${runId}:0003`,
+        payload: { run_id: runId, status: "completed" },
+      },
+    ])
+    const transportCursors = (
+      await deps.streamPort.readAll(replayStream(sessionId))
+    ).map((item) => item.cursor)
+
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: {
+        accept: "text/event-stream",
+        "last-event-id": transportCursors[0] as string,
+      },
+      signal: AbortSignal.timeout(2000),
+    })
+    const text = await readSomeSse(res)
+
+    // 续点之后增量续传：cursor[0] 的 session.created 已交付，跳过；其后的续传。
+    expect(text).not.toContain("event: session.created")
+    expect(text).toContain("event: message.delta")
+    expect(text).toContain("event: run.completed")
+  })
+
+  test("falls back to full replay when Last-Event-ID is not a transport cursor (upgrade transition)", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const sessionId = "ses_legacy"
+    const runId = "run_legacy"
+    const base = {
+      session_id: sessionId,
+      conversation_id: sessionId,
+      run_id: runId,
+      timestamp: "2026-05-30T00:00:00.000Z",
+    }
+    await deps.replayStore.append(sessionId, [
+      {
+        event: "session.created",
+        event_id: "evt_1",
+        ...base,
+        cursor: `${runId}:0001`,
+        payload: {
+          session_id: sessionId,
+          conversation_id: sessionId,
+          owner_id: "agent",
+          title: sessionId,
+        },
+      },
+      {
+        event: "run.completed",
+        event_id: "evt_2",
+        ...base,
+        cursor: `${runId}:0002`,
+        payload: { run_id: runId, status: "completed" },
+      },
+    ])
+
+    // 升级过渡：浏览器仍持旧的域 cursor 作 Last-Event-ID。它不是合法 transport 续点，
+    // 必须被忽略、退回全量重放（reducer 端 eventId 去重兜底），绝不能静默空流。
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: {
+        accept: "text/event-stream",
+        "last-event-id": `${runId}:0001`,
+      },
+      signal: AbortSignal.timeout(2000),
+    })
+    const text = await readSomeSse(res)
+
+    expect(text).toContain("event: session.created")
+    expect(text).toContain("event: run.completed")
+  })
 })
 
 // 读到包含 run.completed 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
@@ -168,14 +324,18 @@ async function readSomeSse(res: Response): Promise<string> {
   if (!reader) throw new Error("no body")
   const decoder = new TextDecoder()
   let buffer = ""
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    if (buffer.includes("event: run.completed")) {
-      await reader.cancel()
-      break
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      if (buffer.includes("event: run.completed")) {
+        await reader.cancel()
+        break
+      }
     }
+  } catch {
+    // AbortSignal.timeout 触发：返回已读部分，让断言判定（空流也被断言捕获，而非抛错）。
   }
   return buffer
 }
