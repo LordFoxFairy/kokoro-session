@@ -1,10 +1,7 @@
 import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
 import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 
-// Normalizer：把原始 agent 事件归一化成 AGUI 信封。
-// 绑定 (session_id, conversation_id, run_id)；注入 id 工厂 + clock 以便测试确定性。
-// 职责：分配 event_id、单调 cursor（run_x:NNNN）、补全归属字段、按 (run_id,seq) 幂等去重、
-//       维护 message_ref→message_id 稳定映射。入站过 agentEventSchema，出站过 parseSessionEvent。
+// 把原始 agent 事件归一化成 AGUI 信封；注入 id 工厂 + clock 让 event_id/时间戳在测试里确定。
 
 export type NormalizerBinding = {
   sessionId: string

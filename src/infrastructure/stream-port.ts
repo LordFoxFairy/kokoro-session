@@ -114,14 +114,13 @@ export class RedisStreamPort implements StreamPort {
     stream: string,
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
-    // 每个订阅独占一条连接：BLOCK xread 会霸占连接，若共享一条，则 dispatch 循环、
-    // 各 run 的 relay 与多个 SSE /stream 会互相饿死、最终把端点拖死。用完即断。
+    // 每个订阅独占一条连接、用完即断：BLOCK xread 霸占连接，共享会让各消费者互相饿死。
     const conn = this.redis.duplicate()
     conn.on("error", () => {})
     try {
       await this.ensureConnected(conn)
-      // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
-      // 续点假设条目未被裁剪：将来加 XTRIM/MAXLEN 后须检测裁剪并回退全量（当前无 trim 配置）。
+      // 退化到 "0-0" 从流首读起（xread 不接受 "" 作 id）；
+      // 续点假设条目未被裁剪，将来加 XTRIM 须检测裁剪并回退全量。
       let lastId = fromCursor || "0-0"
       while (true) {
         const result = await conn.xread("BLOCK", this.blockMs, "STREAMS", stream, lastId)
