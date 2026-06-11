@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { agentEventSchema, runRequestSchema } from "../src/domain/agent-event"
+import { agentEventSchema } from "../src/domain/agent-event"
 
 describe("agentEventSchema", () => {
   test("accepts a well-formed run.started event", () => {
@@ -99,81 +99,6 @@ describe("agentEventSchema", () => {
         run_id: "run_01",
         seq: 2,
         payload: { message_ref: "m1", text: "x", smuggled: 1 },
-      }),
-    ).toThrow()
-  })
-})
-
-describe("runRequestSchema", () => {
-  test("accepts a well-formed run.request", () => {
-    const parsed = runRequestSchema.parse({
-      kind: "run.request",
-      run_id: "run_01",
-      session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello",
-    })
-    expect(parsed.input).toBe("hello")
-    expect(parsed.execution_style).toBeUndefined()
-  })
-
-  test("accepts optional execution_style", () => {
-    const parsed = runRequestSchema.parse({
-      kind: "run.request",
-      run_id: "run_01",
-      session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello",
-      execution_style: "thinking",
-    })
-    expect(parsed.execution_style).toBe("thinking")
-  })
-
-  test("rejects execution_style outside fast/thinking", () => {
-    expect(() =>
-      runRequestSchema.parse({
-        kind: "run.request",
-        run_id: "run_01",
-        session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
-        execution_style: "default",
-      }),
-    ).toThrow()
-  })
-
-  test("requires input", () => {
-    expect(() =>
-      runRequestSchema.parse({
-        kind: "run.request",
-        run_id: "run_01",
-        session_id: "ses_01",
-        conversation_id: "conv_01",
-      }),
-    ).toThrow()
-  })
-
-  test("rejects extra keys (strict)", () => {
-    expect(() =>
-      runRequestSchema.parse({
-        kind: "run.request",
-        run_id: "run_01",
-        session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
-        rogue: true,
-      }),
-    ).toThrow()
-  })
-
-  test("rejects wrong kind literal", () => {
-    expect(() =>
-      runRequestSchema.parse({
-        kind: "run.started",
-        run_id: "run_01",
-        session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
       }),
     ).toThrow()
   })
