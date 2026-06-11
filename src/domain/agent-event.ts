@@ -2,7 +2,7 @@ import { z } from "zod"
 
 // 入站原始 agent 事件契约（agent→session）。所有跨进程载荷进入系统前必过 .strict()，
 // 拦截缺字段 / 注入多余键，避免脏事件污染归一化与 replay。
-// 这些 payload 形状必须与 kokoro-agent 的 AgentEvent（events.py / run_agent.py）保持一致。
+// 这些 payload 形状必须与 kokoro-agent 的 AgentEvent（agent_event.py / run_agent.py）保持一致。
 
 const emptyPayload = z.object({}).strict()
 
