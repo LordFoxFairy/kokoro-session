@@ -37,6 +37,17 @@ describe("agentEventSchema", () => {
     expect(parsed.payload.error_kind).toBe("timeout")
   })
 
+  test("rejects run.completed with a status outside the terminal enum", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        kind: "run.completed",
+        run_id: "run_01",
+        seq: 9,
+        payload: { status: "bogus" },
+      }),
+    ).toThrow()
+  })
+
   test("rejects a missing seq", () => {
     expect(() =>
       agentEventSchema.parse({
