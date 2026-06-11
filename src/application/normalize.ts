@@ -1,5 +1,5 @@
 import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
-import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
+import { parseSessionEvent, type AguiPayload, type SessionEvent } from "../domain/session-event"
 
 // 把原始 agent 事件归一化成 AGUI 信封；注入 id 工厂 + clock 让 event_id/时间戳在测试里确定。
 
@@ -188,9 +188,9 @@ export class Normalizer {
     return id
   }
 
-  private envelope(
-    event: SessionEvent["event"],
-    payload: Record<string, unknown>,
+  private envelope<E extends SessionEvent["event"]>(
+    event: E,
+    payload: AguiPayload<E>,
   ): Omit<SessionEvent, "seq"> {
     const cursor = `${this.binding.runId}:${String(++this.cursorSeq).padStart(4, "0")}`
     return {

@@ -167,6 +167,13 @@ const sessionEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("run.failed"), ...envelopeFields, payload: runFailedPayload }).strict(),
 ])
 
+// 各 kind 出站 payload 类型（从判别联合 schema 推导）：normalize 构造信封时按 event 取得编译期保护。
+type SessionEventUnion = z.infer<typeof sessionEventSchema>
+export type AguiPayload<E extends SessionEventName> = Extract<
+  SessionEventUnion,
+  { event: E }
+>["payload"]
+
 // session 侧严格校验当前实际发出的 AGUI 事件族，避免把脏事件写入 replay 或 SSE。
 export function parseSessionEvent(input: unknown): SessionEvent {
   return sessionEventSchema.parse(input)
