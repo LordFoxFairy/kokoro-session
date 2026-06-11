@@ -18,12 +18,13 @@ function makeNormalizer() {
 }
 
 describe("Normalizer", () => {
-  test("run.started emits protocol-complete session.created (first) + run.created with run-scoped cursors", () => {
+  test("run.started emits protocol-complete session.created (first) + run.created", () => {
     const n = makeNormalizer()
     const out = n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
 
     expect(out.map((e) => e.event)).toEqual(["session.created", "run.created"])
-    expect(out.map((e) => e.cursor)).toEqual(["run_x:0001", "run_x:0002"])
+    // 合成的两条共享 run.started 的 seq。
+    expect(out.map((e) => e.seq)).toEqual([0, 0])
     expect(out[0]?.payload).toMatchObject({
       session_id: "ses_01",
       conversation_id: "conv_01",
@@ -58,7 +59,6 @@ describe("Normalizer", () => {
         session_id: "ses_01",
         conversation_id: "conv_01",
         run_id: "run_x",
-        cursor: "run_x:0002",
         timestamp: "2026-05-30T00:00:00.000Z",
         payload: { run_id: "run_x" },
       }),
@@ -74,7 +74,6 @@ describe("Normalizer", () => {
         session_id: "ses_01",
         conversation_id: "conv_01",
         run_id: "run_x",
-        cursor: "run_x:0001",
         timestamp: "2026-05-30T00:00:00.000Z",
         payload: {
           session_id: "ses_01",
@@ -157,17 +156,18 @@ describe("Normalizer", () => {
     expect(out[0]?.payload).toMatchObject({ error_kind: "timeout", message: "boom" })
   })
 
-  test("cursors are strictly monotonic across the whole run", () => {
+  test("seq is monotonic non-decreasing across the whole run", () => {
     const n = makeNormalizer()
     const all = [
       ...n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} }),
       ...n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { message_ref: "m1", text: "a" } }),
       ...n.ingest({ kind: "run.completed", run_id: "run_x", seq: 2, payload: { status: "completed" } }),
     ]
-    const cursors = all.map((e) => e.cursor)
-    const sorted = [...cursors].sort()
-    expect(cursors).toEqual(sorted)
-    expect(new Set(cursors).size).toBe(cursors.length)
+    // run.started 合成两条共享 seq 0；其后各事件透传自身 seq → 数组单调非降。
+    const seqs = all.map((e) => e.seq)
+    expect(seqs).toEqual([0, 0, 1, 2])
+    const sorted = [...seqs].sort((a, b) => a - b)
+    expect(seqs).toEqual(sorted)
   })
 
   test("envelope carries the agent event's seq as a first-class field", () => {
