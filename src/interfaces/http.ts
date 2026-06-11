@@ -110,9 +110,15 @@ async function handle(
   res.end("not found")
 }
 
-// 从 replay 流首订阅即「先回放历史、再续订实时」：replay 流本身就是该 session 的全量历史。
-// 统一用传输层 stream id 作续订游标——不再把领域 envelope.cursor 误当 Redis id
-// （那会让 Redis 后端 xread 收到非法 id 而静默断流；memory 后端则恰好掩盖了这个 bug）。
+// Last-Event-ID 仅当是传输层游标（memory 纯数字 / redis "ms-seq"）才作续点；域 cursor 或畸形值
+// 一律忽略、退回全量重放（reducer 端 eventId 去重兜底），避免升级过渡期静默空流。
+export function resumeCursor(lastEventId: string | string[] | undefined): string | undefined {
+  if (typeof lastEventId !== "string") return undefined
+  return /^\d+(-\d+)?$/.test(lastEventId) ? lastEventId : undefined
+}
+
+// 续订：带 Last-Event-ID（= 上次 SSE id = replay 流 transport cursor）则从该续点增量续传；
+// 否则从流首全量回放（先历史后实时）。transport cursor 全局单调、可作续点，区别于 per-run 域 cursor。
 async function streamSession(
   req: IncomingMessage,
   res: ServerResponse,
@@ -126,14 +132,15 @@ async function streamSession(
   })
 
   const stream = replayStream(sessionId)
+  const fromCursor = resumeCursor(req.headers["last-event-id"])
   let aborted = false
   req.on("close", () => {
     aborted = true
   })
 
-  for await (const item of dependencies.streamPort.subscribe(stream)) {
+  for await (const item of dependencies.streamPort.subscribe(stream, fromCursor)) {
     if (aborted) break
-    res.write(toSseChunk(parseSessionEvent(item.event)))
+    res.write(toSseChunk(item.cursor, parseSessionEvent(item.event)))
   }
   res.end()
 }

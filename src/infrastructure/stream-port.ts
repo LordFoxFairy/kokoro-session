@@ -121,6 +121,7 @@ export class RedisStreamPort implements StreamPort {
     try {
       await this.ensureConnected(conn)
       // 空串与缺省都从流首读起；Redis xread 不接受 "" 作为合法 id。
+      // 续点假设条目未被裁剪：将来加 XTRIM/MAXLEN 后须检测裁剪并回退全量（当前无 trim 配置）。
       let lastId = fromCursor || "0-0"
       while (true) {
         const result = await conn.xread("BLOCK", this.blockMs, "STREAMS", stream, lastId)
