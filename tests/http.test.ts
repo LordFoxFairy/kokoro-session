@@ -120,6 +120,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
+        seq: 0,
         ...base,
         cursor: `${runId}:0001`,
         payload: {
@@ -142,6 +143,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "message.delta",
         event_id: "evt_2",
+        seq: 1,
         ...base,
         cursor: `${runId}:0002`,
         payload: { message_id: `${runId}:m1`, delta: "你好", role: "assistant" },
@@ -149,6 +151,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_3",
+        seq: 2,
         ...base,
         cursor: `${runId}:0003`,
         payload: { run_id: runId, status: "completed" },
@@ -177,6 +180,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
+        seq: 0,
         ...base,
         cursor: `${runId}:0001`,
         payload: {
@@ -189,6 +193,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_2",
+        seq: 1,
         ...base,
         cursor: `${runId}:0002`,
         payload: { run_id: runId, status: "completed" },
@@ -225,6 +230,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
+        seq: 0,
         ...base,
         cursor: `${runId}:0001`,
         payload: {
@@ -237,6 +243,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "message.delta",
         event_id: "evt_2",
+        seq: 1,
         ...base,
         cursor: `${runId}:0002`,
         payload: { message_id: `${runId}:m1`, delta: "hi", role: "assistant" },
@@ -244,6 +251,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_3",
+        seq: 2,
         ...base,
         cursor: `${runId}:0003`,
         payload: { run_id: runId, status: "completed" },
@@ -284,6 +292,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
+        seq: 0,
         ...base,
         cursor: `${runId}:0001`,
         payload: {
@@ -296,6 +305,7 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_2",
+        seq: 1,
         ...base,
         cursor: `${runId}:0002`,
         payload: { run_id: runId, status: "completed" },
