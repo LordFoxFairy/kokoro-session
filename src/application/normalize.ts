@@ -17,7 +17,6 @@ export type NormalizerClock = {
 export class Normalizer {
   private readonly binding: NormalizerBinding
   private readonly clock: NormalizerClock
-  private cursorSeq = 0
   private sessionCreated = false
   private readonly seenSeqs = new Set<number>()
   private readonly messageIds = new Map<string, string>()
@@ -192,14 +191,12 @@ export class Normalizer {
     event: E,
     payload: AguiPayload<E>,
   ): Omit<SessionEvent, "seq"> {
-    const cursor = `${this.binding.runId}:${String(++this.cursorSeq).padStart(4, "0")}`
     return {
       event,
       event_id: this.clock.newEventId(),
       session_id: this.binding.sessionId,
       conversation_id: this.binding.conversationId,
       run_id: this.binding.runId,
-      cursor,
       timestamp: this.clock.now().toISOString(),
       payload,
     }

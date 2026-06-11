@@ -11,7 +11,6 @@ export type SessionEvent = {
   session_id: string
   conversation_id: string
   run_id: string
-  cursor: string
   timestamp: string
   payload: Record<string, unknown>
 }
@@ -24,7 +23,6 @@ const envelopeFields = {
   session_id: nonEmptyString,
   conversation_id: nonEmptyString,
   run_id: nonEmptyString,
-  cursor: nonEmptyString,
   timestamp: nonEmptyString,
 }
 
