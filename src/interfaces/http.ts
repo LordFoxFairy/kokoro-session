@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
+import { ZodError } from "zod"
+
 import type { ReplayStore, StreamPort } from "../application/ports"
 import { startRun } from "../application/start-run"
 import { parseSessionEvent } from "../domain/session-event"
@@ -38,12 +40,22 @@ function sessionIdFromPath(pathname: string): string | null {
 export function buildServer(dependencies: BuildServerDependencies) {
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res, dependencies).catch((error: unknown) => {
-      if (!res.headersSent) {
-        res.statusCode = 500
-        res.end(error instanceof Error ? error.message : "internal error")
-      } else {
+      if (res.headersSent) {
         res.end()
+        return
       }
+      // ZodError 来自入参 schema 校验：客户端错误归 400，不让其穿透成 500。
+      if (error instanceof ZodError) {
+        res.statusCode = 400
+        res.setHeader("content-type", "application/json")
+        const detail = error.issues
+          .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+          .join("; ")
+        res.end(JSON.stringify({ error: detail || "invalid request" }))
+        return
+      }
+      res.statusCode = 500
+      res.end(error instanceof Error ? error.message : "internal error")
     })
   })
 }
