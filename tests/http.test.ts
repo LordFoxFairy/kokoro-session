@@ -316,6 +316,65 @@ describe("GET /sessions/:id/stream", () => {
   })
 })
 
+describe("HTTP boundary contract", () => {
+  beforeEach(async () => {
+    await listen(makeDeps())
+  })
+
+  test("400 with JSON error body when input is missing", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/runs`, { method: "POST" })
+    expect(res.status).toBe(400)
+    expect(res.headers.get("content-type")).toContain("application/json")
+    expect(await res.json()).toEqual({ error: "missing input" })
+  })
+
+  // 非法枚举是客户端入参错误：必须 400 而非让 ZodError 穿透成 500。
+  test("400 when execution_style is not a known enum value", async () => {
+    const res = await fetch(
+      `${baseUrl}/sessions/ses_01/runs?input=hello&execution_style=bogus`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(400)
+    expect(res.headers.get("content-type")).toContain("application/json")
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toContain("execution_style")
+  })
+})
+
+describe("CORS", () => {
+  beforeEach(async () => {
+    await listen(makeDeps())
+  })
+
+  test("echoes allow-origin and vary: origin for an allowlisted browser origin", async () => {
+    const res = await fetch(`${baseUrl}/nope`, {
+      headers: { origin: "http://localhost:3000" },
+    })
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:3000")
+    expect(res.headers.get("vary")).toBe("origin")
+  })
+
+  test("answers preflight OPTIONS with 204 and an empty body on any path", async () => {
+    const res = await fetch(`${baseUrl}/whatever`, {
+      method: "OPTIONS",
+      headers: { origin: "http://localhost:3000" },
+    })
+    expect(res.status).toBe(204)
+    expect(await res.text()).toBe("")
+    expect(res.headers.get("access-control-allow-methods")).toBe("GET,POST,OPTIONS")
+  })
+
+  // allowlist 之外的源不回显 allow-origin（浏览器侧拦截），但请求本身正常服务。
+  test("omits allow-origin for a non-allowlisted origin while still serving the request", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_cors/runs?input=hello`, {
+      method: "POST",
+      headers: { origin: "http://evil.example" },
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get("access-control-allow-origin")).toBeNull()
+  })
+})
+
 // 读到包含 run.completed 的回放部分即返回，避免在 keep-alive 续订连接上无限等待。
 async function readSomeSse(res: Response): Promise<string> {
   const reader = res.body?.getReader()
