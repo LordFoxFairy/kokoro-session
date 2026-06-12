@@ -78,13 +78,13 @@ describe("relayRun", () => {
       kind: "text.delta",
       run_id: runId,
       seq: 1,
-      payload: { message_ref: "m1", text: "Hi" },
+      payload: { segment_id: "m1", text: "Hi" },
     })
     await streamPort.publish(stream, {
       kind: "text.completed",
       run_id: runId,
       seq: 2,
-      payload: { message_ref: "m1", text: "Hi there" },
+      payload: { segment_id: "m1", text: "Hi there" },
     })
     await streamPort.publish(stream, {
       kind: "run.completed",

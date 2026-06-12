@@ -8,7 +8,7 @@ const emptyPayload = z.object({}).strict()
 
 const textPayload = z
   .object({
-    message_ref: z.string().min(1),
+    segment_id: z.string().min(1),
     text: z.string(),
   })
   .strict()
@@ -29,7 +29,7 @@ const runFailedPayload = z
 // 工具事件：tool_id 关联 invoked/returned；args 任意结构，result 文本化。
 const toolInvokedPayload = z
   .object({
-    message_ref: z.string().min(1),
+    segment_id: z.string().min(1),
     tool_id: z.string().min(1),
     name: z.string().min(1),
     args: z.record(z.unknown()),
@@ -38,7 +38,7 @@ const toolInvokedPayload = z
 
 const toolReturnedPayload = z
   .object({
-    message_ref: z.string().min(1),
+    segment_id: z.string().min(1),
     tool_id: z.string().min(1),
     name: z.string().min(1),
     result: z.string(),
@@ -61,7 +61,7 @@ const todoUpdatedPayload = z
 
 const subagentStartedPayload = z
   .object({
-    message_ref: z.string().min(1),
+    segment_id: z.string().min(1),
     subagent_id: z.string().min(1),
     name: z.string().min(1),
     description: z.string(),
@@ -72,7 +72,7 @@ const subagentStartedPayload = z
 
 const subagentFinishedPayload = z
   .object({
-    message_ref: z.string().min(1),
+    segment_id: z.string().min(1),
     subagent_id: z.string().min(1),
     name: z.string().min(1),
     subagent_type: z.string().min(1),
@@ -98,13 +98,13 @@ export const agentEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("subagent.text.delta"),
     run_id: runId,
     seq,
-    payload: z.object({ message_ref: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
+    payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
   }).strict(),
   z.object({
     kind: z.literal("subagent.text.completed"),
     run_id: runId,
     seq,
-    payload: z.object({ message_ref: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
+    payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict(),
   }).strict(),
   z.object({ kind: z.literal("run.completed"), run_id: runId, seq, payload: runCompletedPayload }).strict(),
   z.object({ kind: z.literal("run.failed"), run_id: runId, seq, payload: runFailedPayload }).strict(),

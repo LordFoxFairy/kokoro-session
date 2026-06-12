@@ -84,50 +84,49 @@ describe("Normalizer", () => {
     ).toThrow()
   })
 
-  test("text.delta maps to message.delta with stable message_id per message_ref", () => {
+  test("text.delta maps to message.delta passing the agent segment_id through", () => {
     const n = makeNormalizer()
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     const a = n.ingest({
       kind: "text.delta",
       run_id: "run_x",
       seq: 1,
-      payload: { message_ref: "m1", text: "Hel" },
+      payload: { segment_id: "m1", text: "Hel" },
     })
     const b = n.ingest({
       kind: "text.delta",
       run_id: "run_x",
       seq: 2,
-      payload: { message_ref: "m1", text: "lo" },
+      payload: { segment_id: "m1", text: "lo" },
     })
 
     expect(a).toHaveLength(1)
     expect(a[0]?.event).toBe("message.delta")
     expect(a[0]?.payload).toMatchObject({ delta: "Hel", role: "assistant" })
-    const mid = a[0]?.payload.message_id
-    expect(typeof mid).toBe("string")
-    // 同一 message_ref → 稳定 message_id。
-    expect(b[0]?.payload.message_id).toBe(mid)
+    // session 透传 agent 分配的 segment_id，不再独立重映射。
+    expect(a[0]?.payload.segment_id).toBe("m1")
+    expect(b[0]?.payload.segment_id).toBe("m1")
     expect(b[0]?.payload).toMatchObject({ delta: "lo", role: "assistant" })
   })
 
-  test("text.completed maps to message.completed with content + same message_id", () => {
+  test("text.completed maps to message.completed with content + same segment_id", () => {
     const n = makeNormalizer()
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     const d = n.ingest({
       kind: "text.delta",
       run_id: "run_x",
       seq: 1,
-      payload: { message_ref: "m1", text: "Hi" },
+      payload: { segment_id: "m1", text: "Hi" },
     })
     const c = n.ingest({
       kind: "text.completed",
       run_id: "run_x",
       seq: 2,
-      payload: { message_ref: "m1", text: "Hi there" },
+      payload: { segment_id: "m1", text: "Hi there" },
     })
     expect(c[0]?.event).toBe("message.completed")
     expect(c[0]?.payload).toMatchObject({ content: "Hi there", role: "assistant" })
-    expect(c[0]?.payload.message_id).toBe(d[0]?.payload.message_id)
+    expect(c[0]?.payload.segment_id).toBe(d[0]?.payload.segment_id)
   })
 
   test("run.completed maps to run.completed envelope with status", () => {
@@ -160,7 +159,7 @@ describe("Normalizer", () => {
     const n = makeNormalizer()
     const all = [
       ...n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} }),
-      ...n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { message_ref: "m1", text: "a" } }),
+      ...n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { segment_id: "m1", text: "a" } }),
       ...n.ingest({ kind: "run.completed", run_id: "run_x", seq: 2, payload: { status: "completed" } }),
     ]
     // run.started 合成两条共享 seq 0；其后各事件透传自身 seq → 数组单调非降。
@@ -180,7 +179,7 @@ describe("Normalizer", () => {
       kind: "text.delta",
       run_id: "run_x",
       seq: 7,
-      payload: { message_ref: "m1", text: "hi" },
+      payload: { segment_id: "m1", text: "hi" },
     })
     expect(delta[0]?.seq).toBe(7)
   })
@@ -196,7 +195,7 @@ describe("Normalizer", () => {
   test("schema collapse: malformed agent event throws", () => {
     const n = makeNormalizer()
     expect(() =>
-      n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { message_ref: "m1" } }),
+      n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { segment_id: "m1" } }),
     ).toThrow()
   })
 
@@ -217,7 +216,7 @@ describe("Normalizer", () => {
       run_id: "run_x",
       seq: 1,
       payload: {
-        message_ref: "m1",
+        segment_id: "m1",
         tool_id: "t1",
         name: "get_weather",
         args: { city: "北京" },
@@ -225,12 +224,12 @@ describe("Normalizer", () => {
     })
     expect(out[0]?.event).toBe("tool.invoked")
     const invokedPayload = out[0]?.payload as {
-      message_id: string
+      segment_id: string
       tool_id: string
       name: string
       args: { city: string }
     }
-    expect(typeof invokedPayload.message_id).toBe("string")
+    expect(typeof invokedPayload.segment_id).toBe("string")
     expect(invokedPayload.tool_id).toBe("t1")
     expect(invokedPayload.name).toBe("get_weather")
     expect(invokedPayload.args).toEqual({ city: "北京" })
@@ -245,7 +244,7 @@ describe("Normalizer", () => {
       run_id: "run_x",
       seq: 1,
       payload: {
-        message_ref: "m1",
+        segment_id: "m1",
         tool_id: "t1",
         name: "get_weather",
         result: "北京: 晴",
@@ -253,12 +252,12 @@ describe("Normalizer", () => {
     })
     expect(out[0]?.event).toBe("tool.returned")
     const returnedPayload = out[0]?.payload as {
-      message_id: string
+      segment_id: string
       tool_id: string
       name: string
       result: string
     }
-    expect(typeof returnedPayload.message_id).toBe("string")
+    expect(typeof returnedPayload.segment_id).toBe("string")
     expect(returnedPayload.tool_id).toBe("t1")
     expect(returnedPayload.name).toBe("get_weather")
     expect(returnedPayload.result).toBe("北京: 晴")
@@ -285,7 +284,7 @@ describe("Normalizer", () => {
       run_id: "run_x",
       seq: 1,
       payload: {
-        message_ref: "m1",
+        segment_id: "m1",
         subagent_id: "sa1",
         name: "researcher",
         description: "查资料",
@@ -298,7 +297,7 @@ describe("Normalizer", () => {
       run_id: "run_x",
       seq: 2,
       payload: {
-        message_ref: "m1",
+        segment_id: "m1",
         subagent_id: "sa1",
         name: "researcher",
         subagent_type: "researcher",
@@ -307,14 +306,14 @@ describe("Normalizer", () => {
     })
     expect(started[0]?.event).toBe("subagent.started")
     const startedPayload = started[0]?.payload as {
-      message_id: string
+      segment_id: string
       subagent_id: string
       name: string
       description: string
       subagent_type: string
       source: string
     }
-    expect(typeof startedPayload.message_id).toBe("string")
+    expect(typeof startedPayload.segment_id).toBe("string")
     expect(startedPayload.subagent_id).toBe("sa1")
     expect(startedPayload.name).toBe("researcher")
     expect(startedPayload.description).toBe("查资料")
@@ -322,45 +321,45 @@ describe("Normalizer", () => {
     expect(startedPayload.source).toBe("built-in")
     expect(finished[0]?.event).toBe("subagent.finished")
     const finishedPayload = finished[0]?.payload as {
-      message_id: string
+      segment_id: string
       subagent_id: string
       name: string
       subagent_type: string
       source: string
     }
-    expect(typeof finishedPayload.message_id).toBe("string")
+    expect(typeof finishedPayload.segment_id).toBe("string")
     expect(finishedPayload.subagent_id).toBe("sa1")
     expect(finishedPayload.name).toBe("researcher")
     expect(finishedPayload.subagent_type).toBe("researcher")
     expect(finishedPayload.source).toBe("built-in")
   })
 
-  test("subagent text maps to subagent text envelopes with message_id + subagent_id", () => {
+  test("subagent text maps to subagent text envelopes with segment_id + subagent_id", () => {
     const n = makeNormalizer()
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     const out = n.ingest({
       kind: "subagent.text.completed",
       run_id: "run_x",
       seq: 1,
-      payload: { message_ref: "m1", subagent_id: "sa1", text: "子智能体结论" },
+      payload: { segment_id: "m1", subagent_id: "sa1", text: "子智能体结论" },
     })
     expect(out[0]?.event).toBe("subagent.text.completed")
     expect(out[0]?.payload).toMatchObject({ subagent_id: "sa1", text: "子智能体结论" })
-    expect(typeof out[0]?.payload.message_id).toBe("string")
+    expect(typeof out[0]?.payload.segment_id).toBe("string")
   })
 
-  test("thinking.delta maps to a thinking.delta envelope with a message_id", () => {
+  test("thinking.delta maps to a thinking.delta envelope with a segment_id", () => {
     const n = makeNormalizer()
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     const out = n.ingest({
       kind: "thinking.delta",
       run_id: "run_x",
       seq: 1,
-      payload: { message_ref: "t1", text: "我在推理" },
+      payload: { segment_id: "t1", text: "我在推理" },
     })
     expect(out[0]?.event).toBe("thinking.delta")
     expect(out[0]?.payload).toMatchObject({ delta: "我在推理" })
-    expect(typeof out[0]?.payload.message_id).toBe("string")
+    expect(typeof out[0]?.payload.segment_id).toBe("string")
   })
 
   test("schema collapse: tool.invoked with an extra key throws", () => {

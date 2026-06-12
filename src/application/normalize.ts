@@ -19,8 +19,6 @@ export class Normalizer {
   private readonly clock: NormalizerClock
   private sessionCreated = false
   private readonly seenSeqs = new Set<number>()
-  private readonly messageIds = new Map<string, string>()
-  private messageCounter = 0
 
   constructor(binding: NormalizerBinding, clock: NormalizerClock) {
     this.binding = binding
@@ -64,20 +62,18 @@ export class Normalizer {
         return envelopes
       }
       case "text.delta": {
-        const messageId = this.messageIdFor(event.payload.message_ref)
         return [
           this.envelope("message.delta", {
-            message_id: messageId,
+            segment_id: event.payload.segment_id,
             delta: event.payload.text,
             role: "assistant",
           }),
         ]
       }
       case "text.completed": {
-        const messageId = this.messageIdFor(event.payload.message_ref)
         return [
           this.envelope("message.completed", {
-            message_id: messageId,
+            segment_id: event.payload.segment_id,
             role: "assistant",
             content: event.payload.text,
           }),
@@ -103,7 +99,7 @@ export class Normalizer {
       case "thinking.delta": {
         return [
           this.envelope("thinking.delta", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             delta: event.payload.text,
           }),
         ]
@@ -111,7 +107,7 @@ export class Normalizer {
       case "tool.invoked": {
         return [
           this.envelope("tool.invoked", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             tool_id: event.payload.tool_id,
             name: event.payload.name,
             args: event.payload.args,
@@ -121,7 +117,7 @@ export class Normalizer {
       case "tool.returned": {
         return [
           this.envelope("tool.returned", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             tool_id: event.payload.tool_id,
             name: event.payload.name,
             result: event.payload.result,
@@ -134,7 +130,7 @@ export class Normalizer {
       case "subagent.started": {
         return [
           this.envelope("subagent.started", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             subagent_id: event.payload.subagent_id,
             name: event.payload.name,
             description: event.payload.description,
@@ -146,7 +142,7 @@ export class Normalizer {
       case "subagent.finished": {
         return [
           this.envelope("subagent.finished", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             subagent_id: event.payload.subagent_id,
             name: event.payload.name,
             subagent_type: event.payload.subagent_type,
@@ -157,7 +153,7 @@ export class Normalizer {
       case "subagent.text.delta": {
         return [
           this.envelope("subagent.text.delta", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             subagent_id: event.payload.subagent_id,
             text: event.payload.text,
           }),
@@ -166,7 +162,7 @@ export class Normalizer {
       case "subagent.text.completed": {
         return [
           this.envelope("subagent.text.completed", {
-            message_id: this.messageIdFor(event.payload.message_ref),
+            segment_id: event.payload.segment_id,
             subagent_id: event.payload.subagent_id,
             text: event.payload.text,
           }),
@@ -177,14 +173,6 @@ export class Normalizer {
 
   private sessionTitle(): string {
     return this.binding.conversationId || this.binding.sessionId
-  }
-
-  private messageIdFor(messageRef: string): string {
-    const existing = this.messageIds.get(messageRef)
-    if (existing) return existing
-    const id = `${this.binding.runId}:msg_${String(++this.messageCounter).padStart(4, "0")}`
-    this.messageIds.set(messageRef, id)
-    return id
   }
 
   private envelope<E extends SessionEvent["event"]>(

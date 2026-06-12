@@ -14,15 +14,15 @@ describe("agentEventSchema", () => {
     expect(parsed.seq).toBe(1)
   })
 
-  test("accepts text.delta with message_ref + text payload", () => {
+  test("accepts text.delta with segment_id + text payload", () => {
     const parsed = agentEventSchema.parse({
       kind: "text.delta",
       run_id: "run_01",
       seq: 2,
-      payload: { message_ref: "m1", text: "hello" },
+      payload: { segment_id: "m1", text: "hello" },
     })
     if (parsed.kind !== "text.delta") throw new Error("narrowing failed")
-    expect(parsed.payload.message_ref).toBe("m1")
+    expect(parsed.payload.segment_id).toBe("m1")
     expect(parsed.payload.text).toBe("hello")
   })
 
@@ -98,7 +98,7 @@ describe("agentEventSchema", () => {
         kind: "text.delta",
         run_id: "run_01",
         seq: 2,
-        payload: { message_ref: "m1" },
+        payload: { segment_id: "m1" },
       }),
     ).toThrow()
   })
@@ -109,7 +109,7 @@ describe("agentEventSchema", () => {
         kind: "text.delta",
         run_id: "run_01",
         seq: 2,
-        payload: { message_ref: "m1", text: "x", smuggled: 1 },
+        payload: { segment_id: "m1", text: "x", smuggled: 1 },
       }),
     ).toThrow()
   })
