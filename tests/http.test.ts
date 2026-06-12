@@ -76,11 +76,9 @@ describe("GET /sessions/:id/stream", () => {
       seq: 2,
       payload: { status: "completed" },
     })
-
-    let n = 0
     const normalizer = new Normalizer(
       { sessionId, conversationId: sessionId, runId },
-      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
     await relayRun({ streamPort: deps.streamPort, replayStore: deps.replayStore, normalizer, sessionId, runId })
 

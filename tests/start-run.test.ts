@@ -92,14 +92,9 @@ describe("relayRun", () => {
       seq: 3,
       payload: { status: "completed" },
     })
-
-    let n = 0
     const normalizer = new Normalizer(
       { sessionId, conversationId, runId },
-      {
-        newEventId: () => `evt_${String(++n).padStart(4, "0")}`,
-        now: () => new Date("2026-05-30T00:00:00.000Z"),
-      },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
 
     await relayRun({ streamPort, replayStore, normalizer, sessionId, runId })
@@ -123,11 +118,9 @@ describe("relayRun", () => {
     await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
     await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
     await streamPort.publish(stream, { kind: "run.completed", run_id: runId, seq: 1, payload: { status: "completed" } })
-
-    let n = 0
     const normalizer = new Normalizer(
       { sessionId: "ses_dup", conversationId: "ses_dup", runId },
-      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
     await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dup", runId })
 
@@ -160,11 +153,9 @@ describe("relayRun", () => {
       seq: 3,
       payload: { status: "completed" },
     })
-
-    let n = 0
     const normalizer = new Normalizer(
       { sessionId: "ses_dirty", conversationId: "ses_dirty", runId },
-      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
     await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dirty", runId })
 
@@ -188,11 +179,9 @@ describe("relayRun", () => {
       seq: 1,
       payload: { error_kind: "timeout", message: "boom" },
     })
-
-    let n = 0
     const normalizer = new Normalizer(
       { sessionId: "ses_fail", conversationId: "ses_fail", runId },
-      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
     await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_fail", runId })
 

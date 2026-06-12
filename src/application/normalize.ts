@@ -1,7 +1,7 @@
 import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
 import { parseSessionEvent, type AguiPayload, type SessionEvent } from "../domain/session-event"
 
-// 把原始 agent 事件归一化成 AGUI 信封；注入 id 工厂 + clock 让 event_id/时间戳在测试里确定。
+// 把原始 agent 事件归一化成 AGUI 信封；注入 clock 让时间戳在测试里确定。
 
 export type NormalizerBinding = {
   sessionId: string
@@ -10,7 +10,6 @@ export type NormalizerBinding = {
 }
 
 export type NormalizerClock = {
-  newEventId: () => string
   now: () => Date
 }
 
@@ -35,16 +34,21 @@ export class Normalizer {
     }
     this.seenSeqs.add(event.seq)
 
-    // 出站自检：每个信封过 AGUI 解析器；并透传该 agent 事件的 seq（含 run.started 合成的两条）。
+    // 出站自检：每个信封过 AGUI 解析器；透传该 agent 事件的 seq（含 run.started 合成的两条）。
+    // event_id 确定性派生自 (run_id, seq, event)：重启/多副本重放产同一 id，web 去重天然幂等。
     return this.mapEvent(event).map((envelope) =>
-      parseSessionEvent({ ...envelope, seq: event.seq }),
+      parseSessionEvent({
+        ...envelope,
+        seq: event.seq,
+        event_id: `evt_${this.binding.runId}_${event.seq}_${envelope.event}`,
+      }),
     )
   }
 
-  private mapEvent(event: AgentEvent): Omit<SessionEvent, "seq">[] {
+  private mapEvent(event: AgentEvent): Omit<SessionEvent, "seq" | "event_id">[] {
     switch (event.kind) {
       case "run.started": {
-        const envelopes: Omit<SessionEvent, "seq">[] = []
+        const envelopes: Omit<SessionEvent, "seq" | "event_id">[] = []
         if (!this.sessionCreated) {
           this.sessionCreated = true
           envelopes.push(
@@ -178,10 +182,9 @@ export class Normalizer {
   private envelope<E extends SessionEvent["event"]>(
     event: E,
     payload: AguiPayload<E>,
-  ): Omit<SessionEvent, "seq"> {
+  ): Omit<SessionEvent, "seq" | "event_id"> {
     return {
       event,
-      event_id: this.clock.newEventId(),
       session_id: this.binding.sessionId,
       conversation_id: this.binding.conversationId,
       run_id: this.binding.runId,
