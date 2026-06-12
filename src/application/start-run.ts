@@ -66,7 +66,14 @@ export type RelayRunInput = {
 export async function relayRun(input: RelayRunInput): Promise<void> {
   const stream = runEventsStream(input.runId)
   for await (const item of input.streamPort.subscribe(stream)) {
-    const envelopes = input.normalizer.ingest(item.event)
+    let envelopes: ReturnType<Normalizer["ingest"]>
+    try {
+      envelopes = input.normalizer.ingest(item.event)
+    } catch (error) {
+      // 单条脏事件跳过不撕整流：否则其后的终态永不落 replay，web 该轮永久卡「进行中」。
+      console.error("skipping dirty agent event", input.runId, error)
+      continue
+    }
     if (envelopes.length > 0) {
       await input.replayStore.append(input.sessionId, envelopes)
     }

@@ -140,6 +140,42 @@ describe("relayRun", () => {
     ])
   })
 
+  test("a dirty event mid-stream is skipped and the terminal still lands (skip-and-continue)", async () => {
+    const streamPort = new MemoryStreamPort()
+    const replayStore = memoryReplayStore()
+    const runId = "run_dirty_mid"
+    const stream = runEventsStream(runId)
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    // 中途混入未知 kind 的脏事件——不得撕掉整条中继,否则终态永不落 replay。
+    await streamPort.publish(stream, { kind: "not.a.kind", run_id: runId, seq: 1, payload: {} })
+    await streamPort.publish(stream, {
+      kind: "text.completed",
+      run_id: runId,
+      seq: 2,
+      payload: { segment_id: `${runId}:seg_0001`, text: "survived" },
+    })
+    await streamPort.publish(stream, {
+      kind: "run.completed",
+      run_id: runId,
+      seq: 3,
+      payload: { status: "completed" },
+    })
+
+    let n = 0
+    const normalizer = new Normalizer(
+      { sessionId: "ses_dirty", conversationId: "ses_dirty", runId },
+      { newEventId: () => `evt_${++n}`, now: () => new Date("2026-05-30T00:00:00.000Z") },
+    )
+    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dirty", runId })
+
+    expect(replayStore.read("ses_dirty").map((e) => e.event)).toEqual([
+      "session.created",
+      "run.created",
+      "message.completed",
+      "run.completed",
+    ])
+  })
+
   test("relay terminates on run.failed", async () => {
     const streamPort = new MemoryStreamPort()
     const replayStore = memoryReplayStore()
