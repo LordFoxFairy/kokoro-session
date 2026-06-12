@@ -10,9 +10,7 @@ const BINDING = {
 }
 
 function makeNormalizer() {
-  let n = 0
   return new Normalizer(BINDING, {
-    newEventId: () => `evt_${String(++n).padStart(4, "0")}`,
     now: () => new Date("2026-05-30T00:00:00.000Z"),
   })
 }
@@ -190,6 +188,25 @@ describe("Normalizer", () => {
     const second = n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
     expect(first).toHaveLength(2)
     expect(second).toEqual([])
+  })
+
+  test("event_id derives from (run_id, seq, event) — replays and replicas produce identical envelopes", () => {
+    const feed = (n: Normalizer) => [
+      ...n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} }),
+      ...n.ingest({ kind: "text.delta", run_id: "run_x", seq: 1, payload: { segment_id: "m1", text: "a" } }),
+      ...n.ingest({ kind: "run.completed", run_id: "run_x", seq: 2, payload: { status: "completed" } }),
+    ]
+    const a = feed(makeNormalizer())
+    const b = feed(makeNormalizer())
+
+    // 多副本/重启重放同一 run 必须产出逐字节相同的 event_id，web 的 eventId 去重才能幂等吸收。
+    expect(a.map((e) => e.event_id)).toEqual(b.map((e) => e.event_id))
+    expect(a[0]?.event_id).toBe("evt_run_x_0_session.created")
+    expect(a[1]?.event_id).toBe("evt_run_x_0_run.created")
+    expect(a[2]?.event_id).toBe("evt_run_x_1_message.delta")
+    expect(a[3]?.event_id).toBe("evt_run_x_2_run.completed")
+    // 合成两条共享 seq 0，靠 event 名保持唯一。
+    expect(new Set(a.map((e) => e.event_id)).size).toBe(a.length)
   })
 
   test("schema collapse: malformed agent event throws", () => {
