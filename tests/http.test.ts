@@ -68,7 +68,7 @@ describe("GET /sessions/:id/stream", () => {
       kind: "text.delta",
       run_id: runId,
       seq: 1,
-      payload: { message_ref: "m1", text: "Hi" },
+      payload: { segment_id: "m1", text: "Hi" },
     })
     await deps.streamPort.publish(stream, {
       kind: "run.completed",
@@ -144,7 +144,7 @@ describe("GET /sessions/:id/stream", () => {
         event_id: "evt_2",
         seq: 1,
         ...base,
-        payload: { message_id: `${runId}:m1`, delta: "你好", role: "assistant" },
+        payload: { segment_id: `${runId}:m1`, delta: "你好", role: "assistant" },
       },
       {
         event: "run.completed",
@@ -239,7 +239,7 @@ describe("GET /sessions/:id/stream", () => {
         event_id: "evt_2",
         seq: 1,
         ...base,
-        payload: { message_id: `${runId}:m1`, delta: "hi", role: "assistant" },
+        payload: { segment_id: `${runId}:m1`, delta: "hi", role: "assistant" },
       },
       {
         event: "run.completed",

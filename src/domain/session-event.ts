@@ -43,7 +43,7 @@ const runCreatedPayload = z
 
 const messageDeltaPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     delta: z.string(),
     role: nonEmptyString,
   })
@@ -51,7 +51,7 @@ const messageDeltaPayload = z
 
 const messageCompletedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     role: nonEmptyString,
     content: z.string(),
   })
@@ -75,14 +75,14 @@ const runFailedPayload = z
 // 活动事件族（思考 / 工具 / todo / 子智能体）：与入站 agent-events 同形，供 web 渲染。
 const thinkingDeltaPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     delta: z.string(),
   })
   .strict()
 
 const toolInvokedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     tool_id: nonEmptyString,
     name: nonEmptyString,
     args: z.record(z.unknown()),
@@ -91,7 +91,7 @@ const toolInvokedPayload = z
 
 const toolReturnedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     tool_id: nonEmptyString,
     name: nonEmptyString,
     result: z.string(),
@@ -113,7 +113,7 @@ const todoUpdatedPayload = z
 
 const subagentStartedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     subagent_id: nonEmptyString,
     name: nonEmptyString,
     description: z.string(),
@@ -124,7 +124,7 @@ const subagentStartedPayload = z
 
 const subagentFinishedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     subagent_id: nonEmptyString,
     name: nonEmptyString,
     subagent_type: nonEmptyString,
@@ -134,7 +134,7 @@ const subagentFinishedPayload = z
 
 const subagentTextDeltaPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     subagent_id: nonEmptyString,
     text: z.string(),
   })
@@ -142,7 +142,7 @@ const subagentTextDeltaPayload = z
 
 const subagentTextCompletedPayload = z
   .object({
-    message_id: nonEmptyString,
+    segment_id: nonEmptyString,
     subagent_id: nonEmptyString,
     text: z.string(),
   })
