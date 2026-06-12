@@ -13,7 +13,13 @@ export async function dispatchRelays(
   replayStore: ReplayStore,
 ): Promise<void> {
   for await (const item of streamPort.subscribe(REQUESTS_STREAM)) {
-    const request = runRequestSchema.parse(item.event)
+    // 单条脏请求跳过不杀循环（skip-and-continue）：否则此后所有新 run 永不被调度。
+    const parsed = runRequestSchema.safeParse(item.event)
+    if (!parsed.success) {
+      console.error("dropping malformed run.request", parsed.error.message)
+      continue
+    }
+    const request = parsed.data
     const normalizer = new Normalizer(
       {
         sessionId: request.session_id,
