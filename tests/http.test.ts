@@ -339,6 +339,32 @@ describe("HTTP boundary contract", () => {
     const body = (await res.json()) as { error: string }
     expect(body.error).toContain("execution_style")
   })
+
+  // 错误方法打到已知资源路径：当前契约无专门 405，一律落 404——钉死之，避免静默行为漂移。
+  test("404 for a known resource path with the wrong method", async () => {
+    const postStream = await fetch(`${baseUrl}/sessions/ses_01/stream`, { method: "POST" })
+    expect(postStream.status).toBe(404)
+    const deleteRuns = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hi`, {
+      method: "DELETE",
+    })
+    expect(deleteRuns.status).toBe(404)
+  })
+})
+
+describe("HTTP error envelope", () => {
+  // 非 Zod 的内部错误（下游 publish 抛）必须显性落 500 带 message，不静默成 200 或挂起。
+  test("500 with the error message when run dispatch throws a non-Zod error", async () => {
+    const deps = makeDeps()
+    deps.streamPort.publish = async () => {
+      throw new Error("redis down")
+    }
+    await listen(deps)
+    const res = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hello`, {
+      method: "POST",
+    })
+    expect(res.status).toBe(500)
+    expect(await res.text()).toBe("redis down")
+  })
 })
 
 describe("CORS", () => {
