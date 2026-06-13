@@ -424,4 +424,17 @@ describe("Normalizer", () => {
       }),
     ).toThrow()
   })
+
+  test("schema collapse: tool.returned missing is_error throws (strict producer boundary)", () => {
+    // 入站 strict + required：缺 is_error 的脏 tool.returned 必被拒，绝不归一化进 replay。
+    const n = makeNormalizer()
+    expect(() =>
+      n.ingest({
+        kind: "tool.returned",
+        run_id: "run_x",
+        seq: 1,
+        payload: { segment_id: "m1", tool_id: "t1", name: "x", result: "ok" },
+      }),
+    ).toThrow()
+  })
 })
