@@ -95,6 +95,7 @@ const toolReturnedPayload = z
     tool_id: nonEmptyString,
     name: nonEmptyString,
     result: z.string(),
+    is_error: z.boolean(),
   })
   .strict()
 

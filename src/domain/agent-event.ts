@@ -42,6 +42,7 @@ const toolReturnedPayload = z
     tool_id: z.string().min(1),
     name: z.string().min(1),
     result: z.string(),
+    is_error: z.boolean(),
   })
   .strict()
 
