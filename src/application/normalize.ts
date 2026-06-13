@@ -125,6 +125,7 @@ export class Normalizer {
             tool_id: event.payload.tool_id,
             name: event.payload.name,
             result: event.payload.result,
+            is_error: event.payload.is_error,
           }),
         ]
       }

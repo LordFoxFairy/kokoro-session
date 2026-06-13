@@ -265,6 +265,7 @@ describe("Normalizer", () => {
         tool_id: "t1",
         name: "get_weather",
         result: "北京: 晴",
+        is_error: false,
       },
     })
     expect(out[0]?.event).toBe("tool.returned")
@@ -273,11 +274,32 @@ describe("Normalizer", () => {
       tool_id: string
       name: string
       result: string
+      is_error: boolean
     }
     expect(typeof returnedPayload.segment_id).toBe("string")
     expect(returnedPayload.tool_id).toBe("t1")
     expect(returnedPayload.name).toBe("get_weather")
     expect(returnedPayload.result).toBe("北京: 晴")
+    expect(returnedPayload.is_error).toBe(false)
+  })
+
+  test("tool.returned carries is_error=true through for a failed tool", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 1,
+      payload: {
+        segment_id: "m1",
+        tool_id: "t1",
+        name: "fetch_url",
+        result: "connection refused",
+        is_error: true,
+      },
+    })
+    expect((out[0]?.payload as { is_error: boolean }).is_error).toBe(true)
+    expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
   test("todo.updated carries the ordered CC-style list through unchanged", () => {
