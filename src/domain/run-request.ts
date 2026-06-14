@@ -9,5 +9,7 @@ export const runRequestSchema = z
     conversation_id: z.string().min(1),
     input: z.string().min(1),
     execution_style: z.enum(["fast", "thinking"]).optional(),
+    // 权限档位（Claude-Code 式）：缺省 = auto（agent 侧默认全放行）。
+    permission_mode: z.enum(["auto", "default", "plan"]).optional(),
   })
   .strict()

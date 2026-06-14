@@ -19,6 +19,7 @@ export type StartRunInput = {
   conversationId?: string
   input: string
   executionStyle?: string
+  permissionMode?: string
 }
 
 export type StartRunDependencies = {
@@ -46,6 +47,9 @@ export async function startRun(
     input: input.input,
     ...(input.executionStyle !== undefined
       ? { execution_style: input.executionStyle }
+      : {}),
+    ...(input.permissionMode !== undefined
+      ? { permission_mode: input.permissionMode }
       : {}),
   })
 

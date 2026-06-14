@@ -100,6 +100,7 @@ async function handle(
         conversationId: requestUrl.searchParams.get("conversation_id") ?? undefined,
         input,
         executionStyle: requestUrl.searchParams.get("execution_style") ?? undefined,
+        permissionMode: requestUrl.searchParams.get("permission_mode") ?? undefined,
       },
       { streamPort: dependencies.streamPort },
     )

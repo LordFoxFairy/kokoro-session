@@ -40,6 +40,31 @@ describe("runRequestSchema", () => {
     ).toThrow()
   })
 
+  test("accepts optional permission_mode", () => {
+    const parsed = runRequestSchema.parse({
+      kind: "run.request",
+      run_id: "run_01",
+      session_id: "ses_01",
+      conversation_id: "conv_01",
+      input: "hello",
+      permission_mode: "plan",
+    })
+    expect(parsed.permission_mode).toBe("plan")
+  })
+
+  test("rejects permission_mode outside auto/default/plan", () => {
+    expect(() =>
+      runRequestSchema.parse({
+        kind: "run.request",
+        run_id: "run_01",
+        session_id: "ses_01",
+        conversation_id: "conv_01",
+        input: "hello",
+        permission_mode: "bogus",
+      }),
+    ).toThrow()
+  })
+
   test("requires input", () => {
     expect(() =>
       runRequestSchema.parse({
