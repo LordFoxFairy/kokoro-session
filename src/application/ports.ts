@@ -13,6 +13,7 @@ export interface StreamPort {
   publish(stream: string, event: unknown): Promise<string>
   readAll(stream: string): Promise<StreamItem[]>
   subscribe(stream: string, fromCursor?: string): AsyncIterable<StreamItem>
+  delete(stream: string): Promise<void>
   close(): Promise<void>
 }
 

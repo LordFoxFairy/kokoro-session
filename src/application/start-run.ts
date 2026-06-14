@@ -99,6 +99,8 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
       await input.replayStore.append(input.sessionId, envelopes)
     }
     if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
+      // 终态后没人再读控制流：删掉它，避免审批/拒绝指令在 redis 里无限留存。
+      await input.streamPort.delete(controlStream(input.runId))
       return
     }
   }

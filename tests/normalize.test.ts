@@ -190,6 +190,26 @@ describe("Normalizer", () => {
     expect(second).toEqual([])
   })
 
+  test("terminal events are exempt from seq dedup so a reused seq cannot swallow the run's end", () => {
+    const n = makeNormalizer()
+    // 工具事件先用掉 seq 5；若 agent 复用 seq 5 发终态，普通去重会把它吞掉致 relay 永不收束。
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const tool = n.ingest({
+      kind: "tool.invoked",
+      run_id: "run_x",
+      seq: 5,
+      payload: { segment_id: "m1", tool_id: "t1", name: "now", args: {} },
+    })
+    expect(tool.map((e) => e.event)).toEqual(["tool.invoked"])
+    const done = n.ingest({
+      kind: "run.completed",
+      run_id: "run_x",
+      seq: 5,
+      payload: { status: "completed" },
+    })
+    expect(done.map((e) => e.event)).toEqual(["run.completed"])
+  })
+
   test("event_id derives from (run_id, seq, event) — replays and replicas produce identical envelopes", () => {
     const feed = (n: Normalizer) => [
       ...n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} }),
