@@ -118,6 +118,16 @@ export class Normalizer {
           }),
         ]
       }
+      case "tool.awaiting_approval": {
+        return [
+          this.envelope("tool.awaiting_approval", {
+            segment_id: event.payload.segment_id,
+            tool_id: event.payload.tool_id,
+            name: event.payload.name,
+            args: event.payload.args,
+          }),
+        ]
+      }
       case "tool.returned": {
         return [
           this.envelope("tool.returned", {

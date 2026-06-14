@@ -14,6 +14,23 @@ export function runEventsStream(runId: string): string {
   return `kokoro:run:${runId}:events`
 }
 
+// HITL 反向通道：web 的批准/拒绝经此流送达 agent worker（被门控工具在其上阻塞等决定）。
+export function controlStream(runId: string): string {
+  return `kokoro:run:${runId}:control`
+}
+
+export type RunControlDecision = "approve" | "reject"
+
+export async function sendRunControl(
+  input: { runId: string; decision: RunControlDecision },
+  dependencies: { streamPort: StreamPort },
+): Promise<void> {
+  await dependencies.streamPort.publish(controlStream(input.runId), {
+    kind: "control",
+    decision: input.decision,
+  })
+}
+
 export type StartRunInput = {
   sessionId: string
   conversationId?: string
