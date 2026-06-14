@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { relayRun, REQUESTS_STREAM, runEventsStream, startRun } from "../src/application/start-run"
+import {
+  controlStream,
+  relayRun,
+  REQUESTS_STREAM,
+  runEventsStream,
+  startRun,
+} from "../src/application/start-run"
 import { runRequestSchema } from "../src/domain/run-request"
 import { memoryReplayStore } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
@@ -190,5 +196,28 @@ describe("relayRun", () => {
       "run.created",
       "run.failed",
     ])
+  })
+
+  test("deletes the control stream on terminal so HITL decisions do not linger", async () => {
+    const streamPort = new MemoryStreamPort()
+    const replayStore = memoryReplayStore()
+    const runId = "run_ctrl_cleanup"
+    const stream = runEventsStream(runId)
+    // 模拟一条遗留的审批指令还挂在控制流上。
+    await streamPort.publish(controlStream(runId), { kind: "control", decision: "approve" })
+    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await streamPort.publish(stream, {
+      kind: "run.completed",
+      run_id: runId,
+      seq: 1,
+      payload: { status: "completed" },
+    })
+    const normalizer = new Normalizer(
+      { sessionId: "ses_ctrl", conversationId: "ses_ctrl", runId },
+      { now: () => new Date("2026-05-30T00:00:00.000Z") },
+    )
+    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_ctrl", runId })
+
+    expect(await streamPort.readAll(controlStream(runId))).toEqual([])
   })
 })

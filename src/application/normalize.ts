@@ -29,7 +29,11 @@ export class Normalizer {
     const event = agentEventSchema.parse(raw)
 
     // 幂等：同 (run_id, seq) 重复喂只产一次。seq 在单 run 内唯一标识。
-    if (this.seenSeqs.has(event.seq)) {
+    // 终态(run.completed/run.failed)豁免去重：万一 agent 复用了已见 seq 发终态,绝不能把它吞掉
+    // 致 relay 永不收束、web 永久「进行中」;重复终态由 web 端 eventId 去重兜底。
+    const isTerminal =
+      event.kind === "run.completed" || event.kind === "run.failed"
+    if (!isTerminal && this.seenSeqs.has(event.seq)) {
       return []
     }
     this.seenSeqs.add(event.seq)

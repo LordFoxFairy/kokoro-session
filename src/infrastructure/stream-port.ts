@@ -56,6 +56,11 @@ export class MemoryStreamPort implements StreamPort {
     this.wakeAll()
   }
 
+  async delete(stream: string): Promise<void> {
+    this.streams.delete(stream)
+    this.wake(stream)
+  }
+
   private wake(stream: string): void {
     const pending = this.waiters.get(stream)
     if (pending) {
@@ -140,6 +145,11 @@ export class RedisStreamPort implements StreamPort {
 
   async close(): Promise<void> {
     this.redis.disconnect()
+  }
+
+  async delete(stream: string): Promise<void> {
+    await this.ensureConnected(this.redis)
+    await this.redis.del(stream)
   }
 
   private async ensureConnected(client: Redis): Promise<void> {
