@@ -140,6 +140,10 @@ export class Normalizer {
             name: event.payload.name,
             result: event.payload.result,
             is_error: event.payload.is_error,
+            // HITL 拒绝标记(仅拒绝时存在)透传：让 web replay 安全地显「已拒绝」而非绿勾。
+            ...(event.payload.rejected !== undefined
+              ? { rejected: event.payload.rejected }
+              : {}),
           }),
         ]
       }
