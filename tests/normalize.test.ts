@@ -322,6 +322,45 @@ describe("Normalizer", () => {
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
+  test("tool.returned carries the HITL rejected flag through (replay-safe distinct visual)", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 1,
+      payload: {
+        segment_id: "m1",
+        tool_id: "t1",
+        name: "fetch_url",
+        result: "用户拒绝了工具 fetch_url 的调用。",
+        is_error: false,
+        rejected: true,
+      },
+    })
+    expect((out[0]?.payload as { rejected?: boolean }).rejected).toBe(true)
+    expect(() => parseSessionEvent(out[0])).not.toThrow()
+  })
+
+  test("tool.returned without rejected omits the key (optional, absence = not rejected)", () => {
+    const n = makeNormalizer()
+    n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
+    const out = n.ingest({
+      kind: "tool.returned",
+      run_id: "run_x",
+      seq: 1,
+      payload: {
+        segment_id: "m1",
+        tool_id: "t1",
+        name: "now",
+        result: "2026-06-14",
+        is_error: false,
+      },
+    })
+    expect((out[0]?.payload as { rejected?: boolean }).rejected).toBeUndefined()
+    expect(() => parseSessionEvent(out[0])).not.toThrow()
+  })
+
   test("todo.updated carries the ordered CC-style list through unchanged", () => {
     const n = makeNormalizer()
     n.ingest({ kind: "run.started", run_id: "run_x", seq: 0, payload: {} })
