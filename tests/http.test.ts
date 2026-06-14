@@ -386,6 +386,18 @@ describe("POST run control (HITL)", () => {
     expect((items[0]?.event as { decision: string }).decision).toBe("approve")
   })
 
+  test("202 and writes a cancel decision (run abandon → worker cancels the run)", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await fetch(
+      `${baseUrl}/sessions/s1/runs/run_1/control?decision=cancel`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(202)
+    const items = await deps.streamPort.readAll(controlStream("run_1"))
+    expect((items[0]?.event as { decision: string }).decision).toBe("cancel")
+  })
+
   test("400 for an invalid decision", async () => {
     await listen(makeDeps())
     const res = await fetch(
