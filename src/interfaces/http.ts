@@ -119,16 +119,18 @@ async function handle(
     return
   }
 
-  // HITL 反向通道：web 批准/拒绝某 run 的待批工具 → 写 control 流（agent worker 读取）。
+  // HITL 反向通道：web 批准/拒绝待批工具(approve/reject) 或放弃整个 run(cancel) → 写 control 流。
   const controlRunId = requestUrl.pathname.match(
     /^\/sessions\/[^/]+\/runs\/([^/]+)\/control$/,
   )?.[1]
   if (req.method === "POST" && controlRunId) {
     const decision = requestUrl.searchParams.get("decision")
-    if (decision !== "approve" && decision !== "reject") {
+    if (decision !== "approve" && decision !== "reject" && decision !== "cancel") {
       res.statusCode = 400
       res.setHeader("content-type", "application/json")
-      res.end(JSON.stringify({ error: "decision must be approve or reject" }))
+      res.end(
+        JSON.stringify({ error: "decision must be approve, reject or cancel" }),
+      )
       return
     }
     await sendRunControl(

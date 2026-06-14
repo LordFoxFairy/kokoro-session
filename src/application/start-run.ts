@@ -19,7 +19,8 @@ export function controlStream(runId: string): string {
   return `kokoro:run:${runId}:control`
 }
 
-export type RunControlDecision = "approve" | "reject"
+// approve/reject 针对待批工具;cancel 放弃整个 run(worker 取消 run task,解阻塞所有待批门)。
+export type RunControlDecision = "approve" | "reject" | "cancel"
 
 export async function sendRunControl(
   input: { runId: string; decision: RunControlDecision },
