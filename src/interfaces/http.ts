@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { ZodError } from "zod"
 
 import type { ReplayStore, StreamPort } from "../application/ports"
-import { startRun } from "../application/start-run"
+import { sendRunControl, startRun } from "../application/start-run"
 import { parseSessionEvent } from "../domain/session-event"
 import { replayStream } from "../infrastructure/replay-store"
 import { toSseChunk } from "../infrastructure/sse"
@@ -116,6 +116,28 @@ async function handle(
     requestUrl.pathname === `/sessions/${sessionId}/stream`
   ) {
     await streamSession(req, res, dependencies, sessionId)
+    return
+  }
+
+  // HITL 反向通道：web 批准/拒绝某 run 的待批工具 → 写 control 流（agent worker 读取）。
+  const controlRunId = requestUrl.pathname.match(
+    /^\/sessions\/[^/]+\/runs\/([^/]+)\/control$/,
+  )?.[1]
+  if (req.method === "POST" && controlRunId) {
+    const decision = requestUrl.searchParams.get("decision")
+    if (decision !== "approve" && decision !== "reject") {
+      res.statusCode = 400
+      res.setHeader("content-type", "application/json")
+      res.end(JSON.stringify({ error: "decision must be approve or reject" }))
+      return
+    }
+    await sendRunControl(
+      { runId: controlRunId, decision },
+      { streamPort: dependencies.streamPort },
+    )
+    res.statusCode = 202
+    res.setHeader("content-type", "application/json")
+    res.end(JSON.stringify({ ok: true }))
     return
   }
 

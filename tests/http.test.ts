@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { relayRun, runEventsStream, startRun } from "../src/application/start-run"
+import {
+  controlStream,
+  relayRun,
+  runEventsStream,
+  startRun,
+} from "../src/application/start-run"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStreamPort } from "../src/infrastructure/stream-port"
 import { buildServer } from "../src/interfaces/http"
@@ -364,6 +369,30 @@ describe("HTTP error envelope", () => {
     })
     expect(res.status).toBe(500)
     expect(await res.text()).toBe("redis down")
+  })
+})
+
+describe("POST run control (HITL)", () => {
+  test("202 and writes the decision to the control stream", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await fetch(
+      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(202)
+    const items = await deps.streamPort.readAll(controlStream("run_1"))
+    expect(items).toHaveLength(1)
+    expect((items[0]?.event as { decision: string }).decision).toBe("approve")
+  })
+
+  test("400 for an invalid decision", async () => {
+    await listen(makeDeps())
+    const res = await fetch(
+      `${baseUrl}/sessions/s1/runs/run_1/control?decision=bogus`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(400)
   })
 })
 
