@@ -10,13 +10,13 @@ import {
   startRun,
 } from "../src/application/start-run"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
-import { MemoryStreamPort } from "../src/infrastructure/stream-port"
+import { MemoryStream } from "../src/infrastructure/stream"
 import { buildServer } from "../src/interfaces/http"
 
 function makeDeps() {
-  const streamPort = new MemoryStreamPort()
-  const replayStore = makeReplayStore(streamPort)
-  return { streamPort, replayStore }
+  const bus = new MemoryStream()
+  const replayStore = makeReplayStore(bus)
+  return { bus, replayStore }
 }
 
 let server: ReturnType<typeof buildServer>
@@ -63,19 +63,19 @@ describe("GET /sessions/:id/stream", () => {
     const sessionId = "ses_sse"
     const { runId } = await startRun(
       { sessionId, input: "hello" },
-      { streamPort: deps.streamPort },
+      { bus: deps.bus },
     )
 
     // 模拟 agent worker：把原始事件回写到 run 事件流。
     const stream = runEventsStream(runId)
-    await deps.streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await deps.streamPort.publish(stream, {
+    await deps.bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await deps.bus.publish(stream, {
       kind: "text.delta",
       run_id: runId,
       seq: 1,
       payload: { segment_id: "m1", text: "Hi" },
     })
-    await deps.streamPort.publish(stream, {
+    await deps.bus.publish(stream, {
       kind: "run.completed",
       run_id: runId,
       seq: 2,
@@ -85,7 +85,7 @@ describe("GET /sessions/:id/stream", () => {
       { sessionId, conversationId: sessionId, runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ streamPort: deps.streamPort, replayStore: deps.replayStore, normalizer, sessionId, runId })
+    await relayRun({ bus: deps.bus, replayStore: deps.replayStore, normalizer, sessionId, runId })
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: { accept: "text/event-stream" },
@@ -198,7 +198,7 @@ describe("GET /sessions/:id/stream", () => {
       },
     ])
     const transportCursors = (
-      await deps.streamPort.readAll(replayStream(sessionId))
+      await deps.bus.readAll(replayStream(sessionId))
     ).map((item) => item.cursor)
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
@@ -253,7 +253,7 @@ describe("GET /sessions/:id/stream", () => {
       },
     ])
     const transportCursors = (
-      await deps.streamPort.readAll(replayStream(sessionId))
+      await deps.bus.readAll(replayStream(sessionId))
     ).map((item) => item.cursor)
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
@@ -360,7 +360,7 @@ describe("HTTP error envelope", () => {
   // 非 Zod 的内部错误（下游 publish 抛）必须显性落 500 带 message，不静默成 200 或挂起。
   test("500 with the error message when run dispatch throws a non-Zod error", async () => {
     const deps = makeDeps()
-    deps.streamPort.publish = async () => {
+    deps.bus.publish = async () => {
       throw new Error("redis down")
     }
     await listen(deps)
@@ -381,7 +381,7 @@ describe("POST run control (HITL)", () => {
       { method: "POST" },
     )
     expect(res.status).toBe(202)
-    const items = await deps.streamPort.readAll(controlStream("run_1"))
+    const items = await deps.bus.readAll(controlStream("run_1"))
     expect(items).toHaveLength(1)
     expect((items[0]?.event as { decision: string }).decision).toBe("approve")
   })
@@ -394,7 +394,7 @@ describe("POST run control (HITL)", () => {
       { method: "POST" },
     )
     expect(res.status).toBe(202)
-    const items = await deps.streamPort.readAll(controlStream("run_1"))
+    const items = await deps.bus.readAll(controlStream("run_1"))
     expect((items[0]?.event as { decision: string }).decision).toBe("cancel")
   })
 

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { ZodError } from "zod"
 
-import type { ReplayStore, StreamPort } from "../application/ports"
+import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl, startRun } from "../application/start-run"
 import { parseSessionEvent } from "../domain/session-event"
 import { replayStream } from "../infrastructure/replay-store"
@@ -25,7 +25,7 @@ function applyBrowserHeaders(req: IncomingMessage, res: ServerResponse): void {
 }
 
 export type BuildServerDependencies = {
-  streamPort: StreamPort
+  bus: StreamProtocol
   replayStore: ReplayStore
 }
 
@@ -102,7 +102,7 @@ async function handle(
         executionStyle: requestUrl.searchParams.get("execution_style") ?? undefined,
         permissionMode: requestUrl.searchParams.get("permission_mode") ?? undefined,
       },
-      { streamPort: dependencies.streamPort },
+      { bus: dependencies.bus },
     )
     res.statusCode = 200
     res.setHeader("content-type", "application/json")
@@ -135,7 +135,7 @@ async function handle(
     }
     await sendRunControl(
       { runId: controlRunId, decision },
-      { streamPort: dependencies.streamPort },
+      { bus: dependencies.bus },
     )
     res.statusCode = 202
     res.setHeader("content-type", "application/json")
@@ -175,7 +175,7 @@ async function streamSession(
     aborted = true
   })
 
-  for await (const item of dependencies.streamPort.subscribe(stream, fromCursor)) {
+  for await (const item of dependencies.bus.subscribe(stream, fromCursor)) {
     if (aborted) break
     res.write(toSseChunk(item.cursor, parseSessionEvent(item.event)))
   }

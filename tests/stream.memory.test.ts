@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 
-import { MemoryStreamPort } from "../src/infrastructure/stream-port"
+import { MemoryStream } from "../src/infrastructure/stream"
 
 const STREAM = "kokoro:test:stream"
 
-describe("MemoryStreamPort", () => {
+describe("MemoryStream", () => {
   test("publish then readAll preserves order with distinct cursors", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     const c1 = await port.publish(STREAM, { n: 1 })
     const c2 = await port.publish(STREAM, { n: 2 })
     const c3 = await port.publish(STREAM, { n: 3 })
@@ -19,12 +19,12 @@ describe("MemoryStreamPort", () => {
   })
 
   test("readAll on an empty stream returns []", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     expect(await port.readAll("kokoro:test:empty")).toEqual([])
   })
 
   test("subscribe(fromCursor) skips events at or before the cursor", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     const c1 = await port.publish(STREAM, { n: 1 })
     await port.publish(STREAM, { n: 2 })
     await port.publish(STREAM, { n: 3 })
@@ -38,7 +38,7 @@ describe("MemoryStreamPort", () => {
   })
 
   test("subscribe without fromCursor yields everything from the start", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     await port.publish(STREAM, { n: 1 })
     await port.publish(STREAM, { n: 2 })
 
@@ -51,7 +51,7 @@ describe("MemoryStreamPort", () => {
   })
 
   test("subscribe delivers events published after subscription starts", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     const seen: unknown[] = []
 
     const consumer = (async () => {
@@ -68,7 +68,7 @@ describe("MemoryStreamPort", () => {
   })
 
   test("streams are isolated from each other", async () => {
-    const port = new MemoryStreamPort()
+    const port = new MemoryStream()
     await port.publish("a", { x: 1 })
     await port.publish("b", { y: 2 })
     expect((await port.readAll("a")).map((e) => e.event)).toEqual([{ x: 1 }])
@@ -76,7 +76,7 @@ describe("MemoryStreamPort", () => {
   })
 
   test("allows a custom cursor width", async () => {
-    const port = new MemoryStreamPort({ cursorWidth: 6 })
+    const port = new MemoryStream({ cursorWidth: 6 })
     const cursor = await port.publish(STREAM, { n: 1 })
     expect(cursor).toBe("000001")
   })
