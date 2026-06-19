@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
-import { parseSessionEvent } from "../src/domain/session-event"
+import {
+  parseSessionEvent,
+  type AguiPayload,
+  type SessionEvent,
+  type SessionEventName,
+} from "../src/domain/session-event"
 
 const BINDING = {
   sessionId: "ses_01",
@@ -13,6 +18,16 @@ function makeNormalizer() {
   return new Normalizer(BINDING, {
     now: () => new Date("2026-05-30T00:00:00.000Z"),
   })
+}
+
+// Typed accessor: assert the envelope is the expected event, then return its
+// schema-derived payload type — replaces inline `as {...}` casts (single source).
+function payloadOf<E extends SessionEventName>(
+  envelope: SessionEvent | undefined,
+  event: E,
+): AguiPayload<E> {
+  expect(envelope?.event).toBe(event)
+  return envelope?.payload as AguiPayload<E>
 }
 
 describe("Normalizer", () => {
@@ -259,13 +274,7 @@ describe("Normalizer", () => {
         args: { city: "北京" },
       },
     })
-    expect(out[0]?.event).toBe("tool.invoked")
-    const invokedPayload = out[0]?.payload as {
-      segment_id: string
-      tool_id: string
-      name: string
-      args: { city: string }
-    }
+    const invokedPayload = payloadOf(out[0], "tool.invoked")
     expect(typeof invokedPayload.segment_id).toBe("string")
     expect(invokedPayload.tool_id).toBe("t1")
     expect(invokedPayload.name).toBe("get_weather")
@@ -288,14 +297,7 @@ describe("Normalizer", () => {
         is_error: false,
       },
     })
-    expect(out[0]?.event).toBe("tool.returned")
-    const returnedPayload = out[0]?.payload as {
-      segment_id: string
-      tool_id: string
-      name: string
-      result: string
-      is_error: boolean
-    }
+    const returnedPayload = payloadOf(out[0], "tool.returned")
     expect(typeof returnedPayload.segment_id).toBe("string")
     expect(returnedPayload.tool_id).toBe("t1")
     expect(returnedPayload.name).toBe("get_weather")
@@ -318,7 +320,7 @@ describe("Normalizer", () => {
         is_error: true,
       },
     })
-    expect((out[0]?.payload as { is_error: boolean }).is_error).toBe(true)
+    expect(payloadOf(out[0], "tool.returned").is_error).toBe(true)
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
@@ -338,7 +340,7 @@ describe("Normalizer", () => {
         rejected: true,
       },
     })
-    expect((out[0]?.payload as { rejected?: boolean }).rejected).toBe(true)
+    expect(payloadOf(out[0], "tool.returned").rejected).toBe(true)
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
@@ -357,7 +359,7 @@ describe("Normalizer", () => {
         is_error: false,
       },
     })
-    expect((out[0]?.payload as { rejected?: boolean }).rejected).toBeUndefined()
+    expect(payloadOf(out[0], "tool.returned").rejected).toBeUndefined()
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
@@ -402,29 +404,14 @@ describe("Normalizer", () => {
         source: "built-in",
       },
     })
-    expect(started[0]?.event).toBe("subagent.started")
-    const startedPayload = started[0]?.payload as {
-      segment_id: string
-      subagent_id: string
-      name: string
-      description: string
-      subagent_type: string
-      source: string
-    }
+    const startedPayload = payloadOf(started[0], "subagent.started")
     expect(typeof startedPayload.segment_id).toBe("string")
     expect(startedPayload.subagent_id).toBe("sa1")
     expect(startedPayload.name).toBe("researcher")
     expect(startedPayload.description).toBe("查资料")
     expect(startedPayload.subagent_type).toBe("researcher")
     expect(startedPayload.source).toBe("built-in")
-    expect(finished[0]?.event).toBe("subagent.finished")
-    const finishedPayload = finished[0]?.payload as {
-      segment_id: string
-      subagent_id: string
-      name: string
-      subagent_type: string
-      source: string
-    }
+    const finishedPayload = payloadOf(finished[0], "subagent.finished")
     expect(typeof finishedPayload.segment_id).toBe("string")
     expect(finishedPayload.subagent_id).toBe("sa1")
     expect(finishedPayload.name).toBe("researcher")
