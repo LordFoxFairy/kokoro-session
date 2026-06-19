@@ -90,7 +90,7 @@ export class RedisStreamPort implements StreamPort {
   constructor(url: string, options?: { blockMs?: number }) {
     this.redis = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1 })
     this.blockMs = options?.blockMs ?? DEFAULT_BLOCK_MS
-    // 探测连接失败时 ioredis 会发 error 事件；吞掉以免污染测试输出（调用方靠 ping() 抛错判活）。
+    // 探测连接失败时 ioredis 会发 error 事件；忽略以免干扰测试输出（调用方靠 ping() 抛错判活）。
     this.redis.on("error", () => {})
   }
 
@@ -119,7 +119,7 @@ export class RedisStreamPort implements StreamPort {
     stream: string,
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
-    // 每个订阅独占一条连接、用完即断：BLOCK xread 霸占连接，共享会让各消费者互相饿死。
+    // 每个订阅独占一条连接、用完即断：BLOCK xread 独占连接，共享会导致各消费者互相阻塞。
     const conn = this.redis.duplicate()
     conn.on("error", () => {})
     try {

@@ -25,12 +25,12 @@ export class Normalizer {
   }
 
   ingest(raw: unknown): SessionEvent[] {
-    // 入站严格校验：缺字段 / 多余键 / 未知 kind 直接抛，绝不把脏事件归一化进 replay。
+    // 入站严格校验：缺字段 / 多余键 / 未知 kind 直接抛，不将脏事件归一化进 replay。
     const event = agentEventSchema.parse(raw)
 
-    // 幂等：同 (run_id, seq) 重复喂只产一次。seq 在单 run 内唯一标识。
-    // 终态(run.completed/run.failed)豁免去重：万一 agent 复用了已见 seq 发终态,绝不能把它吞掉
-    // 致 relay 永不收束、web 永久「进行中」;重复终态由 web 端 eventId 去重兜底。
+    // 幂等：同 (run_id, seq) 重复输入只产出一次。seq 在单 run 内唯一标识。
+    // 终态(run.completed/run.failed)豁免去重：若 agent 复用已见 seq 发终态，去重会丢弃它，
+    // 导致 relay 永不收束、web 停留在「进行中」；重复终态由 web 端 eventId 去重处理。
     const isTerminal =
       event.kind === "run.completed" || event.kind === "run.failed"
     if (!isTerminal && this.seenSeqs.has(event.seq)) {
@@ -39,7 +39,7 @@ export class Normalizer {
     this.seenSeqs.add(event.seq)
 
     // 出站自检：每个信封过 AGUI 解析器；透传该 agent 事件的 seq（含 run.started 合成的两条）。
-    // event_id 确定性派生自 (run_id, seq, event)：重启/多副本重放产同一 id，web 去重天然幂等。
+    // event_id 确定性派生自 (run_id, seq, event)：重启/多副本重放产生同一 id，web 去重幂等。
     return this.mapEvent(event).map((envelope) =>
       parseSessionEvent({
         ...envelope,

@@ -56,7 +56,7 @@ export async function startRun(
   const runId = (dependencies.newRunId ?? defaultRunId)()
   const conversationId = input.conversationId ?? input.sessionId
 
-  // 出站请求前先过严格 schema：拒绝空 input / 多余键，绝不把脏请求写进流。
+  // 出站请求前先过严格 schema：拒绝空 input / 多余键，不将脏请求写进流。
   const request = runRequestSchema.parse({
     kind: "run.request",
     run_id: runId,
@@ -92,7 +92,7 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
     try {
       envelopes = input.normalizer.ingest(item.event)
     } catch (error) {
-      // 单条脏事件跳过不撕整流：否则其后的终态永不落 replay，web 该轮永久卡「进行中」。
+      // 跳过单条脏事件而不中断整条流：否则其后的终态永不落 replay，web 该轮停留在「进行中」。
       console.error("skipping dirty agent event", input.runId, error)
       continue
     }
@@ -100,7 +100,7 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
       await input.replayStore.append(input.sessionId, envelopes)
     }
     if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
-      // 终态后没人再读控制流：删掉它，避免审批/拒绝指令在 redis 里无限留存。
+      // 终态后控制流不再被读取：删除它，避免审批/拒绝指令在 redis 中无限留存。
       await input.streamPort.delete(controlStream(input.runId))
       return
     }

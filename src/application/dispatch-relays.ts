@@ -9,7 +9,7 @@ export async function dispatchRelays(
   replayStore: ReplayStore,
 ): Promise<void> {
   for await (const item of streamPort.subscribe(REQUESTS_STREAM)) {
-    // 单条脏请求跳过不杀循环（skip-and-continue）：否则此后所有新 run 永不被调度。
+    // 跳过单条脏请求而不中断循环（skip-and-continue）：否则此后所有新 run 不再被调度。
     const parsed = runRequestSchema.safeParse(item.event)
     if (!parsed.success) {
       console.error("dropping malformed run.request", parsed.error.message)
@@ -24,7 +24,7 @@ export async function dispatchRelays(
       },
       { now: () => new Date() },
     )
-    // 每个 run 独立 relay，互不阻塞；失败只记录不拖垮调度循环。
+    // 每个 run 独立 relay，互不阻塞；失败仅记录，不影响调度循环。
     void relayRun({
       streamPort,
       replayStore,
