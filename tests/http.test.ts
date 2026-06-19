@@ -448,6 +448,29 @@ describe("POST run control (HITL)", () => {
     expect((items[0]?.event as { decision: string }).decision).toBe("cancel")
   })
 
+  test("202 relays approve with edited tool args to the control stream", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const args = { x: "edited://by-user" }
+    const res = await fetch(
+      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve&args=${encodeURIComponent(JSON.stringify(args))}`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(202)
+    const items = await deps.bus.readAll(controlStream("run_1"))
+    expect((items[0]?.event as { args: unknown }).args).toEqual(args)
+  })
+
+  test("400 for malformed args JSON (client input error, fails loud)", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await fetch(
+      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve&args=not-json`,
+      { method: "POST" },
+    )
+    expect(res.status).toBe(400)
+  })
+
   // 非法 decision 是客户端入参错误：经 Zod 校验落 400，JSON 错误体定位到 decision 字段。
   test("400 with a JSON decision error for an invalid decision", async () => {
     await listen(makeDeps())
