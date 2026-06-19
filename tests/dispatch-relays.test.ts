@@ -2,18 +2,24 @@ import { describe, expect, test } from "bun:test"
 
 import { dispatchRelays } from "../src/application/dispatch-relays"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/start-run"
-import { memoryReplayStore } from "../src/infrastructure/replay-store"
+import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
+import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
-import type { SessionEvent } from "../src/domain/session-event"
+
+// relayRun 把归一化信封 append 到 replayStream(sessionId)；从该 bus 流回读还原已落盘的 replay。
+async function readReplay(bus: MemoryStream, sessionId: string): Promise<SessionEvent[]> {
+  const items = await bus.readAll(replayStream(sessionId))
+  return items.map((item) => parseSessionEvent(item.event))
+}
 
 // 轮询直到 replay 出现终态（dispatch 循环活着才可能发生），超时返回当前快照。
 async function waitForTerminal(
-  read: () => SessionEvent[],
+  read: () => Promise<SessionEvent[]>,
   deadlineMs: number,
 ): Promise<SessionEvent[]> {
   const start = Date.now()
   while (Date.now() - start < deadlineMs) {
-    const events = read()
+    const events = await read()
     if (events.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
       return events
     }
@@ -25,7 +31,7 @@ async function waitForTerminal(
 describe("dispatchRelays", () => {
   test("a malformed run.request is skipped without killing the dispatch loop", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const runId = "run_after_dirty"
 
     // 先灌一条脏请求（多余键 + 缺必填），再灌合法请求——脏请求不得杀死调度循环。
@@ -57,7 +63,7 @@ describe("dispatchRelays", () => {
     // 调度循环常驻不返回；悬挂运行后轮询 replay 验证合法 run 仍被调度。
     void dispatchRelays(bus, replayStore).catch(() => {})
 
-    const events = await waitForTerminal(() => replayStore.read("ses_dispatch"), 1500)
+    const events = await waitForTerminal(() => readReplay(bus, "ses_dispatch"), 1500)
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
       "run.created",

@@ -1,13 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
-import { ZodError } from "zod"
+import { z, ZodError } from "zod"
 
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl, startRun } from "../application/start-run"
 import { parseRunControlArgs, parseRunControlDecision } from "../domain/run-control"
-import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
-import { replayStream } from "../infrastructure/replay-store"
-import { toSseChunk } from "../infrastructure/sse"
+import { streamSession } from "./sse-endpoint"
 
 const allowedBrowserOrigins = new Set([
   process.env.KOKORO_WEB_ORIGIN ?? "http://127.0.0.1:3000",
@@ -30,13 +28,85 @@ export type BuildServerDependencies = {
   replayStore: ReplayStore
 }
 
-function sessionIdFromPath(pathname: string): string | null {
-  const segments = pathname.split("/").filter(Boolean)
-  const sessionId = segments[1]
-  if (segments.length !== 3 || segments[0] !== "sessions" || !sessionId) {
-    return null
-  }
-  return sessionId
+// 入站 query 在 interfaces 层一次性 Zod 解析：空 input → ZodError → 顶层 400；.strip 兜底滤未知键。
+const startRunQuerySchema = z
+  .object({
+    input: z.string().min(1),
+    conversation_id: z.string().optional(),
+    execution_style: z.string().optional(),
+    permission_mode: z.string().optional(),
+  })
+  .strip()
+
+type Route = {
+  method: "GET" | "POST"
+  // 命名捕获组 sessionId / runId 提供路径参数。
+  pattern: RegExp
+  handle: (ctx: RouteContext) => Promise<void>
+}
+
+type RouteContext = {
+  req: IncomingMessage
+  res: ServerResponse
+  url: URL
+  params: Record<string, string>
+  deps: BuildServerDependencies
+}
+
+const routes: Route[] = [
+  {
+    method: "POST",
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/runs$/,
+    handle: handleStartRun,
+  },
+  {
+    method: "GET",
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/stream$/,
+    handle: (ctx) => streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.params.sessionId!),
+  },
+  {
+    method: "POST",
+    pattern: /^\/sessions\/[^/]+\/runs\/(?<runId>[^/]+)\/control$/,
+    handle: handleRunControl,
+  },
+]
+
+async function handleStartRun(ctx: RouteContext): Promise<void> {
+  // 逐键取首值（与 URLSearchParams.get 一致）：重复键退化为最后值会悄悄换语义；null→undefined 交 .optional。
+  const params = ctx.url.searchParams
+  const query = startRunQuerySchema.parse({
+    input: params.get("input") ?? undefined,
+    conversation_id: params.get("conversation_id") ?? undefined,
+    execution_style: params.get("execution_style") ?? undefined,
+    permission_mode: params.get("permission_mode") ?? undefined,
+  })
+  const result = await startRun(
+    {
+      sessionId: ctx.params.sessionId!,
+      conversationId: query.conversation_id,
+      input: query.input,
+      executionStyle: query.execution_style,
+      permissionMode: query.permission_mode,
+    },
+    { bus: ctx.deps.bus },
+  )
+  ctx.res.statusCode = 200
+  ctx.res.setHeader("content-type", "application/json")
+  ctx.res.end(JSON.stringify(result))
+}
+
+// HITL 反向通道：web 批准/拒绝待批工具(approve/reject) 或放弃整个 run(cancel) → 写 control 流。
+async function handleRunControl(ctx: RouteContext): Promise<void> {
+  // 非法/缺失 decision、非法 args（urlencoded JSON，仅 approve 有意义）经 Zod 抛 ZodError → 顶层 400。
+  const decision = parseRunControlDecision(ctx.url.searchParams.get("decision"))
+  const args = parseRunControlArgs(ctx.url.searchParams.get("args"))
+  await sendRunControl(
+    { runId: ctx.params.runId!, decision, args },
+    { bus: ctx.deps.bus },
+  )
+  ctx.res.statusCode = 202
+  ctx.res.setHeader("content-type", "application/json")
+  ctx.res.end(JSON.stringify({ ok: true }))
 }
 
 export function buildServer(dependencies: BuildServerDependencies) {
@@ -81,109 +151,21 @@ async function handle(
     return
   }
 
-  const requestUrl = new URL(req.url, "http://127.0.0.1")
-  const sessionId = sessionIdFromPath(requestUrl.pathname)
-
-  if (
-    req.method === "POST" &&
-    sessionId &&
-    requestUrl.pathname === `/sessions/${sessionId}/runs`
-  ) {
-    const input = requestUrl.searchParams.get("input")
-    if (!input) {
-      res.statusCode = 400
-      res.setHeader("content-type", "application/json")
-      res.end(JSON.stringify({ error: "missing input" }))
-      return
-    }
-    const result = await startRun(
-      {
-        sessionId,
-        conversationId: requestUrl.searchParams.get("conversation_id") ?? undefined,
-        input,
-        executionStyle: requestUrl.searchParams.get("execution_style") ?? undefined,
-        permissionMode: requestUrl.searchParams.get("permission_mode") ?? undefined,
-      },
-      { bus: dependencies.bus },
-    )
-    res.statusCode = 200
-    res.setHeader("content-type", "application/json")
-    res.end(JSON.stringify(result))
-    return
-  }
-
-  if (
-    req.method === "GET" &&
-    sessionId &&
-    requestUrl.pathname === `/sessions/${sessionId}/stream`
-  ) {
-    await streamSession(req, res, dependencies, sessionId)
-    return
-  }
-
-  // HITL 反向通道：web 批准/拒绝待批工具(approve/reject) 或放弃整个 run(cancel) → 写 control 流。
-  const controlRunId = requestUrl.pathname.match(
-    /^\/sessions\/[^/]+\/runs\/([^/]+)\/control$/,
-  )?.[1]
-  if (req.method === "POST" && controlRunId) {
-    // 非法/缺失 decision 经 Zod 抛 ZodError → 顶层处理器归 400（错误体定位到 decision 字段）。
-    const decision = parseRunControlDecision(requestUrl.searchParams.get("decision"))
-    // args（urlencoded JSON，仅 approve 有意义）：非法 JSON / 非对象 → ZodError → 400。
-    const args = parseRunControlArgs(requestUrl.searchParams.get("args"))
-    await sendRunControl(
-      { runId: controlRunId, decision, args },
-      { bus: dependencies.bus },
-    )
-    res.statusCode = 202
-    res.setHeader("content-type", "application/json")
-    res.end(JSON.stringify({ ok: true }))
+  const url = new URL(req.url, "http://127.0.0.1")
+  for (const route of routes) {
+    if (route.method !== req.method) continue
+    const match = route.pattern.exec(url.pathname)
+    if (!match) continue
+    await route.handle({
+      req,
+      res,
+      url,
+      params: match.groups ?? {},
+      deps: dependencies,
+    })
     return
   }
 
   res.statusCode = 404
   res.end("not found")
-}
-
-// Last-Event-ID 仅当是传输层游标（memory 纯数字 / redis "ms-seq"）才作续点；域 cursor 或畸形值
-// 一律忽略、退回全量重放（reducer 端 eventId 去重），避免升级过渡期出现空流。
-export function resumeCursor(lastEventId: string | string[] | undefined): string | undefined {
-  if (typeof lastEventId !== "string") return undefined
-  return /^\d+(-\d+)?$/.test(lastEventId) ? lastEventId : undefined
-}
-
-// 续订：带 Last-Event-ID（= 上次 SSE id = replay 流 transport cursor）则从该续点增量续传；
-// 否则从流首全量回放（先历史后实时）。transport cursor 全局单调、可作续点，区别于 per-run 域 cursor。
-async function streamSession(
-  req: IncomingMessage,
-  res: ServerResponse,
-  dependencies: BuildServerDependencies,
-  sessionId: string,
-): Promise<void> {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-  })
-
-  const stream = replayStream(sessionId)
-  const fromCursor = resumeCursor(req.headers["last-event-id"])
-  let aborted = false
-  req.on("close", () => {
-    aborted = true
-  })
-
-  for await (const item of dependencies.bus.subscribe(stream, fromCursor)) {
-    if (aborted) break
-    // 跳过单条脏事件（损坏/裁剪残留）而不中断 SSE 流：否则此后所有事件都断供。
-    let event: SessionEvent
-    try {
-      event = parseSessionEvent(item.event)
-    } catch (error) {
-      if (!(error instanceof ZodError)) throw error
-      console.error("dropping malformed session event", item.cursor, error.message)
-      continue
-    }
-    res.write(toSseChunk(item.cursor, event))
-  }
-  res.end()
 }

@@ -9,9 +9,16 @@ import {
   runEventsStream,
   startRun,
 } from "../src/application/start-run"
+import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
 import { runRequestSchema } from "../src/domain/run-request"
-import { memoryReplayStore } from "../src/infrastructure/replay-store"
+import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
+
+// relayRun 把归一化信封 append 到 replayStream(sessionId)；从该 bus 流回读还原已落盘的 replay。
+async function readReplay(bus: MemoryStream, sessionId: string): Promise<SessionEvent[]> {
+  const items = await bus.readAll(replayStream(sessionId))
+  return items.map((item) => parseSessionEvent(item.event))
+}
 
 // Local schema mirroring the HITL control envelope (approve/reject针对待批工具, cancel放弃整个 run).
 // 待 SE-3 的 src/domain/run-control.ts 合并后可切换为复用,届时删除此内联 schema。
@@ -82,7 +89,7 @@ describe("startRun", () => {
 describe("relayRun", () => {
   test("normalizes agent events from the run stream into AGUI replay", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const sessionId = "ses_10"
     const conversationId = "conv_10"
     const runId = "run_relay"
@@ -115,7 +122,7 @@ describe("relayRun", () => {
 
     await relayRun({ bus, replayStore, normalizer, sessionId, runId })
 
-    const events = replayStore.read(sessionId)
+    const events = await readReplay(bus, sessionId)
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
@@ -128,7 +135,7 @@ describe("relayRun", () => {
 
   test("relay stops at run.completed and is idempotent on duplicate seqs", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const runId = "run_dup"
     const stream = runEventsStream(runId)
     await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
@@ -140,7 +147,7 @@ describe("relayRun", () => {
     )
     await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dup", runId })
 
-    const events = replayStore.read("ses_dup")
+    const events = await readReplay(bus, "ses_dup")
     // 第二个重复 run.started(seq 0) 被去重；只剩 session.created/run.created/run.completed。
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
@@ -151,7 +158,7 @@ describe("relayRun", () => {
 
   test("a dirty event mid-stream is skipped and the terminal still lands (skip-and-continue)", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const runId = "run_dirty_mid"
     const stream = runEventsStream(runId)
     await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
@@ -175,7 +182,7 @@ describe("relayRun", () => {
     )
     await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dirty", runId })
 
-    expect(replayStore.read("ses_dirty").map((e) => e.event)).toEqual([
+    expect((await readReplay(bus, "ses_dirty")).map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
       "message.completed",
@@ -185,7 +192,7 @@ describe("relayRun", () => {
 
   test("relay terminates on run.failed", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const runId = "run_fail"
     const stream = runEventsStream(runId)
     await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
@@ -201,7 +208,7 @@ describe("relayRun", () => {
     )
     await relayRun({ bus, replayStore, normalizer, sessionId: "ses_fail", runId })
 
-    expect(replayStore.read("ses_fail").map((e) => e.event)).toEqual([
+    expect((await readReplay(bus, "ses_fail")).map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
       "run.failed",
@@ -210,7 +217,7 @@ describe("relayRun", () => {
 
   test("deletes the control stream on terminal so HITL decisions do not linger", async () => {
     const bus = new MemoryStream()
-    const replayStore = memoryReplayStore()
+    const replayStore = makeReplayStore(bus)
     const runId = "run_ctrl_cleanup"
     const stream = runEventsStream(runId)
     // 模拟一条遗留的审批指令还挂在控制流上;先过 schema 确保构造的是合法 control 信封。
