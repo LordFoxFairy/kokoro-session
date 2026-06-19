@@ -4,7 +4,7 @@ import type { StreamItem, StreamProtocol } from "../application/event-stream"
 
 // 这三个常量是 Python/TypeScript 共享的 transport contract，不能随意漂移。
 const CURSOR_WIDTH = 20
-const REDIS_FIELD = "data"
+export const REDIS_FIELD = "data"
 const DEFAULT_BLOCK_MS = 1000
 
 // 进程内单机用：自增序号当游标，等待者用一组 resolver 唤醒，避免忙等轮询。
@@ -160,12 +160,17 @@ export class RedisStream implements StreamProtocol {
   }
 }
 
-function decodeFields(fields: string[]): unknown {
+export function decodeFields(fields: string[]): unknown {
   const idx = fields.indexOf(REDIS_FIELD)
   if (idx < 0 || idx + 1 >= fields.length) return null
   const raw = fields[idx + 1]
   if (raw === undefined) return null
-  return JSON.parse(raw) as unknown
+  // 损坏条目（崩溃/裁剪残留）跳过为 null，避免单条畸形 JSON 炸掉 subscribe/SSE 循环。
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    return null
+  }
 }
 
 // 工厂：按 KOKORO_STREAM_BACKEND 选择实现，默认 memory。
