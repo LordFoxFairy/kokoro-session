@@ -7,6 +7,18 @@ const CURSOR_WIDTH = 20
 export const REDIS_FIELD = "data"
 const DEFAULT_BLOCK_MS = 1000
 
+// 首个 cursor > fromCursor 的下标；items 按定宽游标升序，二分定位续点。
+function indexAfter(items: StreamItem[], fromCursor: string): number {
+  let lo = 0
+  let hi = items.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (items[mid]!.cursor > fromCursor) hi = mid
+    else lo = mid + 1
+  }
+  return lo
+}
+
 // 进程内单机用：自增序号当游标，等待者用一组 resolver 唤醒，避免忙等轮询。
 export class MemoryStream implements StreamProtocol {
   private readonly streams = new Map<string, StreamItem[]>()
@@ -35,20 +47,26 @@ export class MemoryStream implements StreamProtocol {
     stream: string,
     fromCursor?: string,
   ): AsyncIterable<StreamItem> {
-    let lastCursor = fromCursor ?? ""
+    // 流仅追加、游标定宽零填充单调递增：维护 lastIndex 偏移续读，避免每次唤醒全扫（O(n²)）。
+    // 每次重取数组引用：首次 publish 与 delete 后会换新数组（见 publish/delete）。
+    let lastIndex = 0
+    let initialized = fromCursor === undefined
     while (true) {
       const items = this.streams.get(stream) ?? []
-      let yielded = false
-      for (const item of items) {
-        if (item.cursor > lastCursor) {
-          lastCursor = item.cursor
-          yielded = true
-          yield item
-        }
+      if (!initialized) {
+        // 续点：定位首个 cursor > fromCursor 的下标（升序二分），之后纯按偏移推进。
+        lastIndex = indexAfter(items, fromCursor!)
+        initialized = true
+      } else if (lastIndex > items.length) {
+        // delete 后换了更短的新数组：偏移失效，从首读起（counter 不复用，新游标必然更大）。
+        lastIndex = 0
       }
-      if (!yielded) {
-        await this.waitForWake(stream)
+      if (lastIndex < items.length) {
+        yield items[lastIndex]!
+        lastIndex += 1
+        continue
       }
+      await this.waitForWake(stream)
     }
   }
 
