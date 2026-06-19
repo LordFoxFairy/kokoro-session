@@ -6,9 +6,11 @@ import { Normalizer } from "../src/application/normalize"
 import {
   controlStream,
   relayRun,
+  REQUESTS_STREAM,
   runEventsStream,
   startRun,
 } from "../src/application/start-run"
+import { runRequestSchema } from "../src/domain/run-request"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 import { buildServer } from "../src/interfaces/http"
@@ -52,6 +54,19 @@ describe("POST /sessions/:id/runs", () => {
   test("404 for unknown routes", async () => {
     const res = await fetch(`${baseUrl}/nope`)
     expect(res.status).toBe(404)
+  })
+
+  // 回归：重复 input 取首值（与 URLSearchParams.get 一致），不得退化为最后值。
+  test("a duplicated input query key resolves to the first value", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await fetch(`${baseUrl}/sessions/ses_dup_q/runs?input=first&input=second`, {
+      method: "POST",
+    })
+    expect(res.status).toBe(200)
+    const requests = await deps.bus.readAll(REQUESTS_STREAM)
+    const inputs = requests.map((r) => runRequestSchema.parse(r.event).input)
+    expect(inputs).toEqual(["first"])
   })
 })
 
@@ -376,11 +391,12 @@ describe("HTTP boundary contract", () => {
     await listen(makeDeps())
   })
 
-  test("400 with JSON error body when input is missing", async () => {
+  test("400 with JSON error body locating to input when input is missing", async () => {
     const res = await fetch(`${baseUrl}/sessions/ses_01/runs`, { method: "POST" })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
-    expect(await res.json()).toEqual({ error: "missing input" })
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toContain("input")
   })
 
   // 非法枚举是客户端入参错误：必须 400 而非让 ZodError 穿透成 500。

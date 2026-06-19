@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { resumeCursor } from "../src/interfaces/http"
+import { resumeCursor } from "../src/interfaces/sse-endpoint"
 
 // resumeCursor 决定 Last-Event-ID 能否作续点：仅传输层游标格式（memory 纯数字 / redis "ms-seq"）
 // 才续传，域 cursor 或畸形值退回全量重放（eventId 去重兜底）。
