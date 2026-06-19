@@ -4,7 +4,7 @@ import { ZodError } from "zod"
 
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl, startRun } from "../application/start-run"
-import { parseRunControlDecision } from "../domain/run-control"
+import { parseRunControlArgs, parseRunControlDecision } from "../domain/run-control"
 import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 import { replayStream } from "../infrastructure/replay-store"
 import { toSseChunk } from "../infrastructure/sse"
@@ -128,8 +128,10 @@ async function handle(
   if (req.method === "POST" && controlRunId) {
     // 非法/缺失 decision 经 Zod 抛 ZodError → 顶层处理器归 400（错误体定位到 decision 字段）。
     const decision = parseRunControlDecision(requestUrl.searchParams.get("decision"))
+    // args（urlencoded JSON，仅 approve 有意义）：非法 JSON / 非对象 → ZodError → 400。
+    const args = parseRunControlArgs(requestUrl.searchParams.get("args"))
     await sendRunControl(
-      { runId: controlRunId, decision },
+      { runId: controlRunId, decision, args },
       { bus: dependencies.bus },
     )
     res.statusCode = 202

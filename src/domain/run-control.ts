@@ -5,11 +5,16 @@ export const runControlDecisionSchema = z.enum(["approve", "reject", "cancel"])
 
 export type RunControlDecision = z.infer<typeof runControlDecisionSchema>
 
-// HITL 反向通道控制信封（session 写出到 kokoro:run:<id>:control）。
+// 工具参数为 tool 专属、session 不知其形状：以 record 透传，真实校验在 agent 的 Pydantic 边界。
+export const runControlArgsSchema = z.record(z.string(), z.unknown())
+
+// HITL 反向通道控制信封（session 写出到 kokoro:run:<id>:control）。args 仅 approve 有意义：
+// 用户在审批暂停时编辑后的工具参数，整体替换模型原参数。
 export const controlEventSchema = z
   .object({
     kind: z.literal("control"),
     decision: runControlDecisionSchema,
+    args: runControlArgsSchema.optional(),
   })
   .strict()
 
@@ -17,4 +22,20 @@ export const controlEventSchema = z
 const decisionInputSchema = z.object({ decision: runControlDecisionSchema })
 export function parseRunControlDecision(raw: string | null): RunControlDecision {
   return decisionInputSchema.parse({ decision: raw }).decision
+}
+
+// 可选 args query（urlencoded JSON）解析：非法 JSON / 非对象抛 ZodError → 顶层归 400。
+const argsInputSchema = z
+  .string()
+  .transform((raw, ctx) => {
+    try {
+      return JSON.parse(raw) as unknown
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "args is not valid JSON", path: ["args"] })
+      return z.NEVER
+    }
+  })
+  .pipe(runControlArgsSchema)
+export function parseRunControlArgs(raw: string | null): Record<string, unknown> | undefined {
+  return raw === null ? undefined : argsInputSchema.parse(raw)
 }
