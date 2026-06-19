@@ -5,7 +5,7 @@ import { ZodError } from "zod"
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl, startRun } from "../application/start-run"
 import { parseRunControlDecision } from "../domain/run-control"
-import { parseSessionEvent } from "../domain/session-event"
+import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 import { replayStream } from "../infrastructure/replay-store"
 import { toSseChunk } from "../infrastructure/sse"
 
@@ -172,7 +172,16 @@ async function streamSession(
 
   for await (const item of dependencies.bus.subscribe(stream, fromCursor)) {
     if (aborted) break
-    res.write(toSseChunk(item.cursor, parseSessionEvent(item.event)))
+    // 跳过单条脏事件（损坏/裁剪残留）而不中断 SSE 流：否则此后所有事件都断供。
+    let event: SessionEvent
+    try {
+      event = parseSessionEvent(item.event)
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error
+      console.error("dropping malformed session event", item.cursor, error.message)
+      continue
+    }
+    res.write(toSseChunk(item.cursor, event))
   }
   res.end()
 }

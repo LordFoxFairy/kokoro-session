@@ -164,6 +164,56 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("event: run.completed")
   })
 
+  // 回归：损坏条目（decodeFields 兜底为 null）混入回放流时，SSE 必须跳过该条而非整流断供。
+  test("skips a corrupt/null replay entry instead of crashing the SSE stream", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+
+    const sessionId = "ses_corrupt"
+    const runId = "run_corrupt"
+    const base = {
+      session_id: sessionId,
+      conversation_id: sessionId,
+      run_id: runId,
+      timestamp: "2026-05-30T00:00:00.000Z",
+    }
+    await deps.replayStore.append(sessionId, [
+      {
+        event: "session.created",
+        event_id: "evt_1",
+        seq: 0,
+        ...base,
+        payload: {
+          session_id: sessionId,
+          conversation_id: sessionId,
+          owner_id: "agent",
+          title: sessionId,
+        },
+      },
+    ])
+    // 损坏的 Redis 条目经 decodeFields 兜底后即为 null：直接投喂 null 到回放流复现该形态。
+    await deps.bus.publish(replayStream(sessionId), null)
+    await deps.replayStore.append(sessionId, [
+      {
+        event: "run.completed",
+        event_id: "evt_2",
+        seq: 1,
+        ...base,
+        payload: { run_id: runId, status: "completed" },
+      },
+    ])
+
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(2000),
+    })
+    const text = await readSomeSse(res)
+
+    // 损坏条目被跳过，其前后的合法事件照常交付——SSE 流没有被单条脏数据炸断。
+    expect(text).toContain("event: session.created")
+    expect(text).toContain("event: run.completed")
+  })
+
   test("SSE id line carries the replay transport cursor, not the domain envelope cursor", async () => {
     const deps = makeDeps()
     await listen(deps)
