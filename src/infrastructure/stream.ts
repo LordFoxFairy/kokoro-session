@@ -1,6 +1,6 @@
 import { Redis } from "ioredis"
 
-import type { StreamItem, StreamPort } from "../application/ports"
+import type { StreamItem, StreamProtocol } from "../application/event-stream"
 
 // 这三个常量是 Python/TypeScript 共享的 transport contract，不能随意漂移。
 const CURSOR_WIDTH = 20
@@ -8,7 +8,7 @@ const REDIS_FIELD = "data"
 const DEFAULT_BLOCK_MS = 1000
 
 // 进程内单机用：自增序号当游标，等待者用一组 resolver 唤醒，避免忙等轮询。
-export class MemoryStreamPort implements StreamPort {
+export class MemoryStream implements StreamProtocol {
   private readonly streams = new Map<string, StreamItem[]>()
   private readonly waiters = new Map<string, Array<() => void>>()
   private counter = 0
@@ -83,7 +83,7 @@ export class MemoryStreamPort implements StreamPort {
 }
 
 // Redis Streams：xadd 写入（游标=条目 id），xrange 取全量，xread BLOCK 续订。
-export class RedisStreamPort implements StreamPort {
+export class RedisStream implements StreamProtocol {
   private readonly redis: Redis
   private readonly blockMs: number
 
@@ -169,12 +169,12 @@ function decodeFields(fields: string[]): unknown {
 }
 
 // 工厂：按 KOKORO_STREAM_BACKEND 选择实现，默认 memory。
-export function makeStreamPort(): StreamPort {
+export function makeStream(): StreamProtocol {
   const backend = process.env.KOKORO_STREAM_BACKEND ?? "memory"
   if (backend === "redis") {
-    return new RedisStreamPort(
+    return new RedisStream(
       process.env.KOKORO_REDIS_URL ?? "redis://127.0.0.1:6379",
     )
   }
-  return new MemoryStreamPort()
+  return new MemoryStream()
 }

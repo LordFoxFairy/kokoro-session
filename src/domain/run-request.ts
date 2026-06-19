@@ -13,3 +13,5 @@ export const runRequestSchema = z
     permission_mode: z.enum(["auto", "default", "plan"]).optional(),
   })
   .strict()
+
+export type RunRequest = z.infer<typeof runRequestSchema>

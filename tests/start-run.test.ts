@@ -10,11 +10,11 @@ import {
 } from "../src/application/start-run"
 import { runRequestSchema } from "../src/domain/run-request"
 import { memoryReplayStore } from "../src/infrastructure/replay-store"
-import { MemoryStreamPort } from "../src/infrastructure/stream-port"
+import { MemoryStream } from "../src/infrastructure/stream"
 
 describe("startRun", () => {
   test("generates a run id and publishes a valid run.request to the requests stream", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const { runId } = await startRun(
       {
         sessionId: "ses_01",
@@ -22,12 +22,12 @@ describe("startRun", () => {
         input: "hello kokoro",
         executionStyle: "fast",
       },
-      { streamPort },
+      { bus },
     )
 
     expect(runId).toMatch(/^run_/)
 
-    const requests = await streamPort.readAll(REQUESTS_STREAM)
+    const requests = await bus.readAll(REQUESTS_STREAM)
     expect(requests).toHaveLength(1)
     // 写出的 run.request 必须通过严格 schema（合法信封，不带多余键）。
     const parsed = runRequestSchema.parse(requests[0]?.event)
@@ -42,12 +42,12 @@ describe("startRun", () => {
   })
 
   test("defaults conversation_id to session_id when omitted", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const { runId } = await startRun(
       { sessionId: "ses_02", input: "hi" },
-      { streamPort },
+      { bus },
     )
-    const requests = await streamPort.readAll(REQUESTS_STREAM)
+    const requests = await bus.readAll(REQUESTS_STREAM)
     const parsed = runRequestSchema.parse(requests.at(-1)?.event)
     expect(parsed.conversation_id).toBe("ses_02")
     expect(parsed.run_id).toBe(runId)
@@ -55,23 +55,23 @@ describe("startRun", () => {
   })
 
   test("fails loud on an empty executionStyle instead of silently dropping it", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     await expect(
-      startRun({ sessionId: "ses_03", input: "hi", executionStyle: "" }, { streamPort }),
+      startRun({ sessionId: "ses_03", input: "hi", executionStyle: "" }, { bus }),
     ).rejects.toThrow()
   })
 
   test("each run gets a distinct run id", async () => {
-    const streamPort = new MemoryStreamPort()
-    const a = await startRun({ sessionId: "ses_03", input: "a" }, { streamPort })
-    const b = await startRun({ sessionId: "ses_03", input: "b" }, { streamPort })
+    const bus = new MemoryStream()
+    const a = await startRun({ sessionId: "ses_03", input: "a" }, { bus })
+    const b = await startRun({ sessionId: "ses_03", input: "b" }, { bus })
     expect(a.runId).not.toBe(b.runId)
   })
 })
 
 describe("relayRun", () => {
   test("normalizes agent events from the run stream into AGUI replay", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const replayStore = memoryReplayStore()
     const sessionId = "ses_10"
     const conversationId = "conv_10"
@@ -79,20 +79,20 @@ describe("relayRun", () => {
 
     // 预先把 agent 原始事件灌入该 run 的事件流。
     const stream = runEventsStream(runId)
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, {
       kind: "text.delta",
       run_id: runId,
       seq: 1,
       payload: { segment_id: "m1", text: "Hi" },
     })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, {
       kind: "text.completed",
       run_id: runId,
       seq: 2,
       payload: { segment_id: "m1", text: "Hi there" },
     })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, {
       kind: "run.completed",
       run_id: runId,
       seq: 3,
@@ -103,7 +103,7 @@ describe("relayRun", () => {
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
 
-    await relayRun({ streamPort, replayStore, normalizer, sessionId, runId })
+    await relayRun({ bus, replayStore, normalizer, sessionId, runId })
 
     const events = replayStore.read(sessionId)
     expect(events.map((e) => e.event)).toEqual([
@@ -117,18 +117,18 @@ describe("relayRun", () => {
   })
 
   test("relay stops at run.completed and is idempotent on duplicate seqs", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const replayStore = memoryReplayStore()
     const runId = "run_dup"
     const stream = runEventsStream(runId)
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await streamPort.publish(stream, { kind: "run.completed", run_id: runId, seq: 1, payload: { status: "completed" } })
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { kind: "run.completed", run_id: runId, seq: 1, payload: { status: "completed" } })
     const normalizer = new Normalizer(
       { sessionId: "ses_dup", conversationId: "ses_dup", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dup", runId })
+    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dup", runId })
 
     const events = replayStore.read("ses_dup")
     // 第二个重复 run.started(seq 0) 被去重；只剩 session.created/run.created/run.completed。
@@ -140,20 +140,20 @@ describe("relayRun", () => {
   })
 
   test("a dirty event mid-stream is skipped and the terminal still lands (skip-and-continue)", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const replayStore = memoryReplayStore()
     const runId = "run_dirty_mid"
     const stream = runEventsStream(runId)
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
     // 中途混入未知 kind 的脏事件——不得撕掉整条中继,否则终态永不落 replay。
-    await streamPort.publish(stream, { kind: "not.a.kind", run_id: runId, seq: 1, payload: {} })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, { kind: "not.a.kind", run_id: runId, seq: 1, payload: {} })
+    await bus.publish(stream, {
       kind: "text.completed",
       run_id: runId,
       seq: 2,
       payload: { segment_id: `${runId}:seg_0001`, text: "survived" },
     })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, {
       kind: "run.completed",
       run_id: runId,
       seq: 3,
@@ -163,7 +163,7 @@ describe("relayRun", () => {
       { sessionId: "ses_dirty", conversationId: "ses_dirty", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_dirty", runId })
+    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dirty", runId })
 
     expect(replayStore.read("ses_dirty").map((e) => e.event)).toEqual([
       "session.created",
@@ -174,12 +174,12 @@ describe("relayRun", () => {
   })
 
   test("relay terminates on run.failed", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const replayStore = memoryReplayStore()
     const runId = "run_fail"
     const stream = runEventsStream(runId)
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await streamPort.publish(stream, {
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, {
       kind: "run.failed",
       run_id: runId,
       seq: 1,
@@ -189,7 +189,7 @@ describe("relayRun", () => {
       { sessionId: "ses_fail", conversationId: "ses_fail", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_fail", runId })
+    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_fail", runId })
 
     expect(replayStore.read("ses_fail").map((e) => e.event)).toEqual([
       "session.created",
@@ -199,14 +199,14 @@ describe("relayRun", () => {
   })
 
   test("deletes the control stream on terminal so HITL decisions do not linger", async () => {
-    const streamPort = new MemoryStreamPort()
+    const bus = new MemoryStream()
     const replayStore = memoryReplayStore()
     const runId = "run_ctrl_cleanup"
     const stream = runEventsStream(runId)
     // 模拟一条遗留的审批指令还挂在控制流上。
-    await streamPort.publish(controlStream(runId), { kind: "control", decision: "approve" })
-    await streamPort.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await streamPort.publish(stream, {
+    await bus.publish(controlStream(runId), { kind: "control", decision: "approve" })
+    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, {
       kind: "run.completed",
       run_id: runId,
       seq: 1,
@@ -216,8 +216,8 @@ describe("relayRun", () => {
       { sessionId: "ses_ctrl", conversationId: "ses_ctrl", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ streamPort, replayStore, normalizer, sessionId: "ses_ctrl", runId })
+    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_ctrl", runId })
 
-    expect(await streamPort.readAll(controlStream(runId))).toEqual([])
+    expect(await bus.readAll(controlStream(runId))).toEqual([])
   })
 })

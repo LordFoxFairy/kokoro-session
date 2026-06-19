@@ -1,5 +1,5 @@
 import { runRequestSchema } from "../domain/run-request"
-import type { ReplayStore, StreamPort } from "./ports"
+import type { ReplayStore, StreamProtocol } from "./event-stream"
 import type { Normalizer } from "./normalize"
 
 // run_id 生成器：可注入以便测试确定性（start-run 的测试 seam，非被 infra 实现的端口）。
@@ -24,9 +24,9 @@ export type RunControlDecision = "approve" | "reject" | "cancel"
 
 export async function sendRunControl(
   input: { runId: string; decision: RunControlDecision },
-  dependencies: { streamPort: StreamPort },
+  dependencies: { bus: StreamProtocol },
 ): Promise<void> {
-  await dependencies.streamPort.publish(controlStream(input.runId), {
+  await dependencies.bus.publish(controlStream(input.runId), {
     kind: "control",
     decision: input.decision,
   })
@@ -41,7 +41,7 @@ export type StartRunInput = {
 }
 
 export type StartRunDependencies = {
-  streamPort: StreamPort
+  bus: StreamProtocol
   newRunId?: RunIdFactory
 }
 
@@ -71,12 +71,12 @@ export async function startRun(
       : {}),
   })
 
-  await dependencies.streamPort.publish(REQUESTS_STREAM, request)
+  await dependencies.bus.publish(REQUESTS_STREAM, request)
   return { runId }
 }
 
 export type RelayRunInput = {
-  streamPort: StreamPort
+  bus: StreamProtocol
   replayStore: ReplayStore
   normalizer: Normalizer
   sessionId: string
@@ -87,7 +87,7 @@ export type RelayRunInput = {
 // 避免连接一直挂等。重复 seq 由 normalizer 去重，断连/空流不崩。
 export async function relayRun(input: RelayRunInput): Promise<void> {
   const stream = runEventsStream(input.runId)
-  for await (const item of input.streamPort.subscribe(stream)) {
+  for await (const item of input.bus.subscribe(stream)) {
     let envelopes: ReturnType<Normalizer["ingest"]>
     try {
       envelopes = input.normalizer.ingest(item.event)
@@ -101,7 +101,7 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
     }
     if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
       // 终态后控制流不再被读取：删除它，避免审批/拒绝指令在 redis 中无限留存。
-      await input.streamPort.delete(controlStream(input.runId))
+      await input.bus.delete(controlStream(input.runId))
       return
     }
   }
