@@ -448,13 +448,17 @@ describe("POST run control (HITL)", () => {
     expect((items[0]?.event as { decision: string }).decision).toBe("cancel")
   })
 
-  test("400 for an invalid decision", async () => {
+  // 非法 decision 是客户端入参错误：经 Zod 校验落 400，JSON 错误体定位到 decision 字段。
+  test("400 with a JSON decision error for an invalid decision", async () => {
     await listen(makeDeps())
     const res = await fetch(
       `${baseUrl}/sessions/s1/runs/run_1/control?decision=bogus`,
       { method: "POST" },
     )
     expect(res.status).toBe(400)
+    expect(res.headers.get("content-type")).toContain("application/json")
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toContain("decision")
   })
 })
 

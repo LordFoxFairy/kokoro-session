@@ -1,4 +1,8 @@
 import { runRequestSchema } from "../domain/run-request"
+import {
+  controlEventSchema,
+  type RunControlDecision,
+} from "../domain/run-control"
 import type { ReplayStore, StreamProtocol } from "./event-stream"
 import type { Normalizer } from "./normalize"
 
@@ -19,17 +23,16 @@ export function controlStream(runId: string): string {
   return `kokoro:run:${runId}:control`
 }
 
-// approve/reject 针对待批工具;cancel 放弃整个 run(worker 取消 run task,解阻塞所有待批门)。
-export type RunControlDecision = "approve" | "reject" | "cancel"
-
 export async function sendRunControl(
   input: { runId: string; decision: RunControlDecision },
   dependencies: { bus: StreamProtocol },
 ): Promise<void> {
-  await dependencies.bus.publish(controlStream(input.runId), {
+  // 出站前过严格 schema：拒绝非法 decision / 多余键，不将脏控制事件写进流。
+  const event = controlEventSchema.parse({
     kind: "control",
     decision: input.decision,
   })
+  await dependencies.bus.publish(controlStream(input.runId), event)
 }
 
 export type StartRunInput = {

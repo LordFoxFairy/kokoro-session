@@ -4,6 +4,7 @@ import { ZodError } from "zod"
 
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl, startRun } from "../application/start-run"
+import { parseRunControlDecision } from "../domain/run-control"
 import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 import { replayStream } from "../infrastructure/replay-store"
 import { toSseChunk } from "../infrastructure/sse"
@@ -31,10 +32,11 @@ export type BuildServerDependencies = {
 
 function sessionIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean)
-  if (segments.length !== 3 || segments[0] !== "sessions") {
+  const sessionId = segments[1]
+  if (segments.length !== 3 || segments[0] !== "sessions" || !sessionId) {
     return null
   }
-  return segments[1] || null
+  return sessionId
 }
 
 export function buildServer(dependencies: BuildServerDependencies) {
@@ -124,15 +126,8 @@ async function handle(
     /^\/sessions\/[^/]+\/runs\/([^/]+)\/control$/,
   )?.[1]
   if (req.method === "POST" && controlRunId) {
-    const decision = requestUrl.searchParams.get("decision")
-    if (decision !== "approve" && decision !== "reject" && decision !== "cancel") {
-      res.statusCode = 400
-      res.setHeader("content-type", "application/json")
-      res.end(
-        JSON.stringify({ error: "decision must be approve, reject or cancel" }),
-      )
-      return
-    }
+    // 非法/缺失 decision 经 Zod 抛 ZodError → 顶层处理器归 400（错误体定位到 decision 字段）。
+    const decision = parseRunControlDecision(requestUrl.searchParams.get("decision"))
     await sendRunControl(
       { runId: controlRunId, decision },
       { bus: dependencies.bus },

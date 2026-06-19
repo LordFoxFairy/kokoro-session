@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { z } from "zod"
 
 import { Normalizer } from "../src/application/normalize"
 import {
@@ -11,6 +12,15 @@ import {
 import { runRequestSchema } from "../src/domain/run-request"
 import { memoryReplayStore } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
+
+// Local schema mirroring the HITL control envelope (approve/reject针对待批工具, cancel放弃整个 run).
+// 待 SE-3 的 src/domain/run-control.ts 合并后可切换为复用,届时删除此内联 schema。
+const controlEventSchema = z
+  .object({
+    kind: z.literal("control"),
+    decision: z.enum(["approve", "reject", "cancel"]),
+  })
+  .strict()
 
 describe("startRun", () => {
   test("generates a run id and publishes a valid run.request to the requests stream", async () => {
@@ -203,8 +213,9 @@ describe("relayRun", () => {
     const replayStore = memoryReplayStore()
     const runId = "run_ctrl_cleanup"
     const stream = runEventsStream(runId)
-    // 模拟一条遗留的审批指令还挂在控制流上。
-    await bus.publish(controlStream(runId), { kind: "control", decision: "approve" })
+    // 模拟一条遗留的审批指令还挂在控制流上;先过 schema 确保构造的是合法 control 信封。
+    const lingering = controlEventSchema.parse({ kind: "control", decision: "approve" })
+    await bus.publish(controlStream(runId), lingering)
     await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
     await bus.publish(stream, {
       kind: "run.completed",
@@ -219,5 +230,28 @@ describe("relayRun", () => {
     await relayRun({ bus, replayStore, normalizer, sessionId: "ses_ctrl", runId })
 
     expect(await bus.readAll(controlStream(runId))).toEqual([])
+  })
+})
+
+// 待 SE-3 的 run-control schema 合并后,这些断言可切换为复用 src/domain/run-control.ts。
+describe("control envelope", () => {
+  test.each(["approve", "reject", "cancel"] as const)(
+    "accepts the %s decision",
+    (decision) => {
+      const parsed = controlEventSchema.parse({ kind: "control", decision })
+      expect(parsed).toEqual({ kind: "control", decision })
+    },
+  )
+
+  test("rejects an unknown decision (fails loud, not silently relayed)", () => {
+    expect(() =>
+      controlEventSchema.parse({ kind: "control", decision: "nuke" }),
+    ).toThrow()
+  })
+
+  test("rejects extra keys on the control envelope (strict boundary)", () => {
+    expect(() =>
+      controlEventSchema.parse({ kind: "control", decision: "approve", extra: 1 }),
+    ).toThrow()
   })
 })
