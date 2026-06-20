@@ -3,7 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { z, ZodError } from "zod"
 
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
-import { sendRunControl, startRun } from "../application/start-run"
+import { sendRunControl } from "../application/send-run-control"
+import { startRun } from "../application/start-run"
 import { parseRunControlArgs, parseRunControlDecision } from "../domain/run-control"
 import { streamSession } from "./sse-endpoint"
 

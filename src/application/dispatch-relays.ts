@@ -1,7 +1,8 @@
 import { runRequestSchema } from "../domain/run-request"
 import { Normalizer } from "./normalize"
 import type { ReplayStore, StreamProtocol } from "./event-stream"
-import { relayRun, REQUESTS_STREAM } from "./start-run"
+import { relayRun } from "./relay-run"
+import { REQUESTS_STREAM } from "./stream-names"
 
 // 后台调度：消费 run 请求流，为每个 run 起一条 relay（归一化 agent 事件 → replay）。
 export async function dispatchRelays(
