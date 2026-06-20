@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { z } from "zod"
 
 import { Normalizer } from "../src/application/normalize"
+import { relayRun } from "../src/application/relay-run"
+import { startRun } from "../src/application/start-run"
 import {
   controlStream,
-  relayRun,
   REQUESTS_STREAM,
   runEventsStream,
-  startRun,
-} from "../src/application/start-run"
+} from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
 import { runRequestSchema } from "../src/domain/run-request"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"

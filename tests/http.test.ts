@@ -3,13 +3,13 @@ import type { AddressInfo } from "node:net"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
+import { relayRun } from "../src/application/relay-run"
+import { startRun } from "../src/application/start-run"
 import {
   controlStream,
-  relayRun,
   REQUESTS_STREAM,
   runEventsStream,
-  startRun,
-} from "../src/application/start-run"
+} from "../src/application/stream-names"
 import { runRequestSchema } from "../src/domain/run-request"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"

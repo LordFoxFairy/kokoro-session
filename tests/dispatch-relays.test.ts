@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import { dispatchRelays } from "../src/application/dispatch-relays"
-import { REQUESTS_STREAM, runEventsStream } from "../src/application/start-run"
+import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
