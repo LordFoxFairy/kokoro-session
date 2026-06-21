@@ -5,8 +5,8 @@ import { REQUESTS_STREAM } from "./stream-names"
 // run_id 生成器：可注入以便测试确定性（start-run 的测试 seam，非被 infra 实现的端口）。
 type RunIdFactory = () => string
 
-// session 不再 HTTP 同步调 agent：生成 run_id，把合法 run.request 发到请求流，
-// agent worker 消费后把原始事件回写到 run 事件流，由 relayRun 归一化进 replay。
+// session 不再 HTTP 同步调 agent：startRun 只生成 run_id 并把合法 run.request 发到请求流，
+// 后续由 agent worker 与 relayRun 异步接力。
 
 export type StartRunInput = {
   sessionId: string
