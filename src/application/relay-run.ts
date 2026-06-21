@@ -1,3 +1,4 @@
+import type { SessionEvent } from "../domain/session-event"
 import type { ReplayStore, StreamProtocol } from "./event-stream"
 import type { Normalizer } from "./normalize"
 import { controlStream, runEventsStream } from "./stream-names"
@@ -15,7 +16,7 @@ export type RelayRunInput = {
 export async function relayRun(input: RelayRunInput): Promise<void> {
   const stream = runEventsStream(input.runId)
   for await (const item of input.bus.subscribe(stream)) {
-    let envelopes: ReturnType<Normalizer["ingest"]>
+    let envelopes: SessionEvent[]
     try {
       envelopes = input.normalizer.ingest(item.event)
     } catch (error) {
