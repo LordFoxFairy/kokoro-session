@@ -45,19 +45,18 @@ describe("dispatchRelays", () => {
     })
 
     // 合法 run 的 agent 事件已就绪，relay 一启动即可收束。
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
     await bus.publish(stream, {
-      kind: "text.completed",
-      run_id: runId,
-      seq: 1,
-      payload: { segment_id: `${runId}:seg_0001`, text: "still alive" },
+      event: "text_chunk",
+      ...env,
+      data: { segment_id: `${runId}:seg_0001`, text: "still alive", final: true },
     })
     await bus.publish(stream, {
-      kind: "run.completed",
-      run_id: runId,
-      seq: 2,
-      payload: { status: "completed" },
+      event: "agent_done",
+      ...env,
+      data: { status: "completed", usage: {} },
     })
 
     // 调度循环常驻不返回；悬挂运行后轮询 replay 验证合法 run 仍被调度。

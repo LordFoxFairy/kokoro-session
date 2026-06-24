@@ -81,20 +81,19 @@ describe("GET /sessions/:id/stream", () => {
       { bus: deps.bus },
     )
 
-    // 模拟 agent worker：把原始事件回写到 run 事件流。
+    // 模拟 agent worker：把 canonical wire 事件回写到 run 事件流。
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await deps.bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await deps.bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
     await deps.bus.publish(stream, {
-      kind: "text.delta",
-      run_id: runId,
-      seq: 1,
-      payload: { segment_id: "m1", text: "Hi" },
+      event: "text_chunk",
+      ...env,
+      data: { segment_id: "m1", text: "Hi", final: false },
     })
     await deps.bus.publish(stream, {
-      kind: "run.completed",
-      run_id: runId,
-      seq: 2,
-      payload: { status: "completed" },
+      event: "agent_done",
+      ...env,
+      data: { status: "completed", usage: {} },
     })
     const normalizer = new Normalizer(
       { sessionId, conversationId: sessionId, runId },

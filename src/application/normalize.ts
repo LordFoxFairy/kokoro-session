@@ -1,7 +1,8 @@
 import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
 import { parseSessionEvent, type AguiPayload, type SessionEvent } from "../domain/session-event"
 
-// 把原始 agent 事件归一化成 AGUI 信封；注入 clock 让时间戳在测试里确定。
+// 把 agent canonical wire 事件归一化成 AG-UI 信封；注入 clock 让时间戳在测试里确定。
+// agent 不再发 seq；定序/去重靠 transport cursor（零填充数字串），seq 由 cursor 派生。
 
 export type NormalizerBinding = {
   sessionId: string
@@ -17,41 +18,105 @@ export class Normalizer {
   private readonly binding: NormalizerBinding
   private readonly clock: NormalizerClock
   private sessionCreated = false
-  private readonly seenSeqs = new Set<number>()
+  private readonly seenCursors = new Set<string>()
 
   constructor(binding: NormalizerBinding, clock: NormalizerClock) {
     this.binding = binding
     this.clock = clock
   }
 
-  ingest(raw: unknown): SessionEvent[] {
-    // 入站严格校验：缺字段 / 多余键 / 未知 kind 直接抛，不将脏事件归一化进 replay。
+  ingest(raw: unknown, cursor: string): SessionEvent[] {
+    // 入站严格校验：缺字段 / 多余键 / 未知 event 直接抛，不将脏事件归一化进 replay。
     const event = agentEventSchema.parse(raw)
 
-    // 幂等：同 (run_id, seq) 重复输入只产出一次。seq 在单 run 内唯一标识。
-    // 终态(run.completed/run.failed)豁免去重：若 agent 复用已见 seq 发终态，去重会丢弃它，
-    // 导致 relay 永不收束、web 停留在「进行中」；重复终态由 web 端 eventId 去重处理。
-    const isTerminal =
-      event.kind === "run.completed" || event.kind === "run.failed"
-    if (!isTerminal && this.seenSeqs.has(event.seq)) {
+    // seq 由 transport cursor 派生（cursor 是定宽数字串，唯一定序源）。
+    const seq = Number(cursor)
+
+    const envelopes = this.mapEvent(event)
+
+    // 幂等：同一 cursor 重复输入只产出一次。终态(run.completed/run.failed)豁免去重：
+    // 若同一 cursor 复用发终态，去重会丢弃它，导致 relay 永不收束、web 停留在「进行中」；
+    // 重复终态由 web 端 event_id 去重处理。
+    const isTerminal = envelopes.some(
+      (e) => e.event === "run.completed" || e.event === "run.failed",
+    )
+    if (!isTerminal && this.seenCursors.has(cursor)) {
       return []
     }
-    this.seenSeqs.add(event.seq)
+    this.seenCursors.add(cursor)
 
-    // 出站自检：每个信封过 AGUI 解析器；透传该 agent 事件的 seq（含 run.started 合成的两条）。
-    // event_id 确定性派生自 (run_id, seq, event)：重启/多副本重放产生同一 id，web 去重幂等。
-    return this.mapEvent(event).map((envelope) =>
+    // 出站自检：每个信封过 AG-UI 解析器；透传由 cursor 派生的 seq。
+    // event_id 确定性派生自 (request_id, cursor, event)：重启/多副本重放产生同一 id，web 去重幂等。
+    return envelopes.map((envelope) =>
       parseSessionEvent({
         ...envelope,
-        seq: event.seq,
-        event_id: `evt_${this.binding.runId}_${event.seq}_${envelope.event}`,
+        seq,
+        event_id: `evt_${event.request_id}_${cursor}_${envelope.event}`,
       }),
     )
   }
 
   private mapEvent(event: AgentEvent): Omit<SessionEvent, "seq" | "event_id">[] {
-    switch (event.kind) {
-      case "run.started": {
+    switch (event.event) {
+      case "agent_status":
+        return this.mapStatus(event.data, event.request_id)
+      case "text_chunk":
+        return this.mapTextChunk(event.data)
+      case "reasoning_chunk": {
+        // web thinking 纯续写，终态帧多余 → final=true 丢弃。
+        if (event.data.final) return []
+        return [
+          this.envelope("thinking.delta", {
+            segment_id: event.data.segment_id,
+            delta: event.data.text,
+          }),
+        ]
+      }
+      case "tool_call_start":
+        return [
+          this.envelope("tool.invoked", {
+            segment_id: event.data.segment_id,
+            tool_id: event.data.tool_id,
+            name: event.data.name,
+            args: event.data.args,
+          }),
+        ]
+      case "tool_call_end":
+        return [
+          this.envelope("tool.returned", {
+            segment_id: event.data.segment_id,
+            tool_id: event.data.tool_id,
+            name: event.data.name,
+            result: event.data.result,
+            is_error: event.data.is_error,
+            rejected: event.data.rejected,
+          }),
+        ]
+      case "agent_done":
+        return [
+          this.envelope("run.completed", {
+            run_id: event.request_id,
+            status: event.data.status,
+          }),
+        ]
+      case "agent_error":
+        return [
+          this.envelope("run.failed", {
+            run_id: event.request_id,
+            error_kind: event.data.error_kind,
+            message: event.data.message,
+          }),
+        ]
+    }
+  }
+
+  private mapStatus(
+    data: Extract<AgentEvent, { event: "agent_status" }>["data"],
+    requestId: string,
+  ): Omit<SessionEvent, "seq" | "event_id">[] {
+    switch (data.status) {
+      case "started": {
+        // 维持现有 run.started 行为：首次合成 session.created，再发 run.created。
         const envelopes: Omit<SessionEvent, "seq" | "event_id">[] = []
         if (!this.sessionCreated) {
           this.sessionCreated = true
@@ -64,134 +129,92 @@ export class Normalizer {
             }),
           )
         }
-        envelopes.push(
-          this.envelope("run.created", { run_id: this.binding.runId }),
-        )
+        envelopes.push(this.envelope("run.created", { run_id: requestId }))
         return envelopes
       }
-      case "text.delta": {
+      case "todo_updated":
+        // agent wire 把 todos 作 unknown[] 透传；AG-UI 的逐项 strict 形状由出站 parseSessionEvent 兜底校验。
         return [
-          this.envelope("message.delta", {
-            segment_id: event.payload.segment_id,
-            delta: event.payload.text,
-            role: "assistant",
+          this.envelope("todo.updated", {
+            todos: data.todos as AguiPayload<"todo.updated">["todos"],
           }),
         ]
-      }
-      case "text.completed": {
-        return [
-          this.envelope("message.completed", {
-            segment_id: event.payload.segment_id,
-            role: "assistant",
-            content: event.payload.text,
-          }),
-        ]
-      }
-      case "run.completed": {
-        return [
-          this.envelope("run.completed", {
-            run_id: this.binding.runId,
-            status: event.payload.status,
-          }),
-        ]
-      }
-      case "run.failed": {
-        return [
-          this.envelope("run.failed", {
-            run_id: this.binding.runId,
-            error_kind: event.payload.error_kind,
-            message: event.payload.message,
-          }),
-        ]
-      }
-      case "thinking.delta": {
-        return [
-          this.envelope("thinking.delta", {
-            segment_id: event.payload.segment_id,
-            delta: event.payload.text,
-          }),
-        ]
-      }
-      case "tool.invoked": {
-        return [
-          this.envelope("tool.invoked", {
-            segment_id: event.payload.segment_id,
-            tool_id: event.payload.tool_id,
-            name: event.payload.name,
-            args: event.payload.args,
-          }),
-        ]
-      }
-      case "tool.awaiting_approval": {
-        return [
-          this.envelope("tool.awaiting_approval", {
-            segment_id: event.payload.segment_id,
-            tool_id: event.payload.tool_id,
-            name: event.payload.name,
-            args: event.payload.args,
-          }),
-        ]
-      }
-      case "tool.returned": {
-        return [
-          this.envelope("tool.returned", {
-            segment_id: event.payload.segment_id,
-            tool_id: event.payload.tool_id,
-            name: event.payload.name,
-            result: event.payload.result,
-            is_error: event.payload.is_error,
-            // 透传 HITL 拒绝标记（仅拒绝时存在），使 web replay 将该工具渲染为已拒绝态而非成功完成。
-            ...(event.payload.rejected !== undefined
-              ? { rejected: event.payload.rejected }
-              : {}),
-          }),
-        ]
-      }
-      case "todo.updated": {
-        return [this.envelope("todo.updated", { todos: event.payload.todos })]
-      }
-      case "subagent.started": {
+      case "subagent_started":
+        // source 在 agent wire 是 string；AG-UI 收窄为 enum，由出站 parseSessionEvent 强校验。
         return [
           this.envelope("subagent.started", {
-            segment_id: event.payload.segment_id,
-            subagent_id: event.payload.subagent_id,
-            name: event.payload.name,
-            description: event.payload.description,
-            subagent_type: event.payload.subagent_type,
-            source: event.payload.source,
+            segment_id: data.segment_id,
+            subagent_id: data.subagent_id,
+            name: data.name,
+            description: data.description,
+            subagent_type: data.subagent_type,
+            source: data.source as AguiPayload<"subagent.started">["source"],
           }),
         ]
-      }
-      case "subagent.finished": {
+      case "subagent_finished":
         return [
           this.envelope("subagent.finished", {
-            segment_id: event.payload.segment_id,
-            subagent_id: event.payload.subagent_id,
-            name: event.payload.name,
-            subagent_type: event.payload.subagent_type,
-            source: event.payload.source,
+            segment_id: data.segment_id,
+            subagent_id: data.subagent_id,
+            name: data.name,
+            subagent_type: data.subagent_type,
+            source: data.source as AguiPayload<"subagent.finished">["source"],
           }),
         ]
-      }
-      case "subagent.text.delta": {
-        return [
-          this.envelope("subagent.text.delta", {
-            segment_id: event.payload.segment_id,
-            subagent_id: event.payload.subagent_id,
-            text: event.payload.text,
+      case "custom":
+        // 业务遥测，web 不渲染 → 丢弃。
+        return []
+      case "awaiting_approval":
+        // 对 pending[] 每项扇出一条 tool.awaiting_approval。
+        return data.pending.map((p) =>
+          this.envelope("tool.awaiting_approval", {
+            segment_id: data.segment_id,
+            tool_id: p.tool_id,
+            name: p.name,
+            args: p.args,
           }),
-        ]
-      }
-      case "subagent.text.completed": {
+        )
+    }
+  }
+
+  private mapTextChunk(
+    data: Extract<AgentEvent, { event: "text_chunk" }>["data"],
+  ): Omit<SessionEvent, "seq" | "event_id">[] {
+    if (data.subagent_id !== undefined) {
+      // 子智能体文本走独立通道，按 final 分增量 / 终态。
+      if (data.final) {
         return [
           this.envelope("subagent.text.completed", {
-            segment_id: event.payload.segment_id,
-            subagent_id: event.payload.subagent_id,
-            text: event.payload.text,
+            segment_id: data.segment_id,
+            subagent_id: data.subagent_id,
+            text: data.text,
           }),
         ]
       }
+      return [
+        this.envelope("subagent.text.delta", {
+          segment_id: data.segment_id,
+          subagent_id: data.subagent_id,
+          text: data.text,
+        }),
+      ]
     }
+    if (data.final) {
+      return [
+        this.envelope("message.completed", {
+          segment_id: data.segment_id,
+          role: "assistant",
+          content: data.text,
+        }),
+      ]
+    }
+    return [
+      this.envelope("message.delta", {
+        segment_id: data.segment_id,
+        delta: data.text,
+        role: "assistant",
+      }),
+    ]
   }
 
   private sessionTitle(): string {

@@ -94,26 +94,24 @@ describe("relayRun", () => {
     const conversationId = "conv_10"
     const runId = "run_relay"
 
-    // 预先把 agent 原始事件灌入该 run 的事件流。
+    // 预先把 agent canonical wire 事件灌入该 run 的事件流。
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
     await bus.publish(stream, {
-      kind: "text.delta",
-      run_id: runId,
-      seq: 1,
-      payload: { segment_id: "m1", text: "Hi" },
+      event: "text_chunk",
+      ...env,
+      data: { segment_id: "m1", text: "Hi", final: false },
     })
     await bus.publish(stream, {
-      kind: "text.completed",
-      run_id: runId,
-      seq: 2,
-      payload: { segment_id: "m1", text: "Hi there" },
+      event: "text_chunk",
+      ...env,
+      data: { segment_id: "m1", text: "Hi there", final: true },
     })
     await bus.publish(stream, {
-      kind: "run.completed",
-      run_id: runId,
-      seq: 3,
-      payload: { status: "completed" },
+      event: "agent_done",
+      ...env,
+      data: { status: "completed", usage: {} },
     })
     const normalizer = new Normalizer(
       { sessionId, conversationId, runId },
@@ -133,14 +131,16 @@ describe("relayRun", () => {
     expect(events.every((e) => e.session_id === sessionId)).toBe(true)
   })
 
-  test("relay stops at run.completed and is idempotent on duplicate seqs", async () => {
+  test("relay stops at terminal; session.created is synthesized only once across started events", async () => {
     const bus = new MemoryStream()
     const replayStore = makeReplayStore(bus)
     const runId = "run_dup"
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    await bus.publish(stream, { kind: "run.completed", run_id: runId, seq: 1, payload: { status: "completed" } })
+    // 两条 started 落在不同 cursor（非同一条目重放）→ 不算重复；但 session.created 只合成一次。
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
+    await bus.publish(stream, { event: "agent_done", ...env, data: { status: "completed", usage: {} } })
     const normalizer = new Normalizer(
       { sessionId: "ses_dup", conversationId: "ses_dup", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
@@ -148,9 +148,9 @@ describe("relayRun", () => {
     await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dup", runId })
 
     const events = await readReplay(bus, "ses_dup")
-    // 第二个重复 run.started(seq 0) 被去重；只剩 session.created/run.created/run.completed。
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
+      "run.created",
       "run.created",
       "run.completed",
     ])
@@ -160,21 +160,20 @@ describe("relayRun", () => {
     const bus = new MemoryStream()
     const replayStore = makeReplayStore(bus)
     const runId = "run_dirty_mid"
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
-    // 中途混入未知 kind 的脏事件——不得撕掉整条中继,否则终态永不落 replay。
-    await bus.publish(stream, { kind: "not.a.kind", run_id: runId, seq: 1, payload: {} })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
+    // 中途混入未知 event 的脏事件——不得撕掉整条中继,否则终态永不落 replay。
+    await bus.publish(stream, { event: "not_an_event", ...env, data: {} })
     await bus.publish(stream, {
-      kind: "text.completed",
-      run_id: runId,
-      seq: 2,
-      payload: { segment_id: `${runId}:seg_0001`, text: "survived" },
+      event: "text_chunk",
+      ...env,
+      data: { segment_id: `${runId}:seg_0001`, text: "survived", final: true },
     })
     await bus.publish(stream, {
-      kind: "run.completed",
-      run_id: runId,
-      seq: 3,
-      payload: { status: "completed" },
+      event: "agent_done",
+      ...env,
+      data: { status: "completed", usage: {} },
     })
     const normalizer = new Normalizer(
       { sessionId: "ses_dirty", conversationId: "ses_dirty", runId },
@@ -194,13 +193,13 @@ describe("relayRun", () => {
     const bus = new MemoryStream()
     const replayStore = makeReplayStore(bus)
     const runId = "run_fail"
+    const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
     await bus.publish(stream, {
-      kind: "run.failed",
-      run_id: runId,
-      seq: 1,
-      payload: { error_kind: "timeout", message: "boom" },
+      event: "agent_error",
+      ...env,
+      data: { error_kind: "timeout", message: "boom" },
     })
     const normalizer = new Normalizer(
       { sessionId: "ses_fail", conversationId: "ses_fail", runId },
@@ -222,13 +221,13 @@ describe("relayRun", () => {
     const stream = runEventsStream(runId)
     // 模拟一条遗留的审批指令还挂在控制流上;先过 schema 确保构造的是合法 control 信封。
     const lingering = controlEventSchema.parse({ kind: "control", decision: "approve" })
+    const env = { request_id: runId, timestamp: 1700000000 }
     await bus.publish(controlStream(runId), lingering)
-    await bus.publish(stream, { kind: "run.started", run_id: runId, seq: 0, payload: {} })
+    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
     await bus.publish(stream, {
-      kind: "run.completed",
-      run_id: runId,
-      seq: 1,
-      payload: { status: "completed" },
+      event: "agent_done",
+      ...env,
+      data: { status: "completed", usage: {} },
     })
     const normalizer = new Normalizer(
       { sessionId: "ses_ctrl", conversationId: "ses_ctrl", runId },
