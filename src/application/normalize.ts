@@ -81,6 +81,16 @@ export class Normalizer {
             args: event.data.args,
           }),
         ]
+      case "tool_call_awaiting":
+        // agent 现发逐工具顶层 tool_call_awaiting，直映 AG-UI tool.awaiting_approval（不再拆 pending 数组）。
+        return [
+          this.envelope("tool.awaiting_approval", {
+            segment_id: event.data.segment_id,
+            tool_id: event.data.tool_id,
+            name: event.data.name,
+            args: event.data.args,
+          }),
+        ]
       case "tool_call_end":
         return [
           this.envelope("tool.returned", {
@@ -164,16 +174,6 @@ export class Normalizer {
       case "custom":
         // 业务遥测，web 不渲染 → 丢弃。
         return []
-      case "awaiting_approval":
-        // 对 pending[] 每项扇出一条 tool.awaiting_approval。
-        return data.pending.map((p) =>
-          this.envelope("tool.awaiting_approval", {
-            segment_id: data.segment_id,
-            tool_id: p.tool_id,
-            name: p.name,
-            args: p.args,
-          }),
-        )
     }
   }
 
