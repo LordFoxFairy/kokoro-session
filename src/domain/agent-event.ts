@@ -1,25 +1,27 @@
-// DO NOT EDIT — generated from contract/events.yaml by contract/generate.py.
-// Run `python3 contract/generate.py` after changing the contract.
+// DO NOT EDIT — generated from kokoro-agent envelope.py by contract/agent_wire.py.
+// agent 是 wire 单源真理；改 envelope.py 后跑 `python3 contract/generate.py`。
 
 import { z } from "zod"
 
-const envelope = { run_id: z.string().min(1), seq: z.number().int().nonnegative() }
+const agentStatusData = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("started") }).strict(),
+  z.object({ status: z.literal("todo_updated"), segment_id: z.string(), todos: z.array(z.unknown()) }).strict(),
+  z.object({ status: z.literal("subagent_started"), segment_id: z.string(), subagent_id: z.string(), name: z.string(), description: z.string(), subagent_type: z.string(), source: z.string() }).strict(),
+  z.object({ status: z.literal("subagent_finished"), segment_id: z.string(), subagent_id: z.string(), name: z.string(), subagent_type: z.string(), source: z.string() }).strict(),
+  z.object({ status: z.literal("custom"), custom: z.unknown() }).strict(),
+  z.object({ status: z.literal("awaiting_approval"), segment_id: z.string(), pending: z.array(z.object({ tool_id: z.string(), name: z.string(), args: z.record(z.unknown()) }).strict()) }).strict(),
+])
 
-export const agentEventSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("run.started"), ...envelope, payload: z.object({}).strict() }).strict(),
-  z.object({ kind: z.literal("thinking.delta"), ...envelope, payload: z.object({ segment_id: z.string().min(1), text: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal("text.delta"), ...envelope, payload: z.object({ segment_id: z.string().min(1), text: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal("text.completed"), ...envelope, payload: z.object({ segment_id: z.string().min(1), text: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal("tool.invoked"), ...envelope, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), args: z.record(z.unknown()) }).strict() }).strict(),
-  z.object({ kind: z.literal("tool.awaiting_approval"), ...envelope, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), args: z.record(z.unknown()) }).strict() }).strict(),
-  z.object({ kind: z.literal("tool.returned"), ...envelope, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), result: z.string(), is_error: z.boolean(), rejected: z.boolean().optional() }).strict() }).strict(),
-  z.object({ kind: z.literal("todo.updated"), ...envelope, payload: z.object({ todos: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]) }).strict()) }).strict() }).strict(),
-  z.object({ kind: z.literal("subagent.started"), ...envelope, payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), name: z.string().min(1), description: z.string(), subagent_type: z.string().min(1), source: z.enum(["built-in", "config-custom", "runtime-custom"]) }).strict() }).strict(),
-  z.object({ kind: z.literal("subagent.finished"), ...envelope, payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), name: z.string().min(1), subagent_type: z.string().min(1), source: z.enum(["built-in", "config-custom", "runtime-custom"]) }).strict() }).strict(),
-  z.object({ kind: z.literal("subagent.text.delta"), ...envelope, payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal("subagent.text.completed"), ...envelope, payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), text: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal("run.completed"), ...envelope, payload: z.object({ status: z.enum(["completed", "cancelled", "timeout"]) }).strict() }).strict(),
-  z.object({ kind: z.literal("run.failed"), ...envelope, payload: z.object({ error_kind: z.string().min(1), message: z.string().min(1) }).strict() }).strict(),
+const envelope = { request_id: z.string(), timestamp: z.number() }
+
+export const agentEventSchema = z.discriminatedUnion("event", [
+  z.object({ event: z.literal("agent_status"), ...envelope, data: agentStatusData }).strict(),
+  z.object({ event: z.literal("text_chunk"), ...envelope, data: z.object({ segment_id: z.string(), text: z.string(), final: z.boolean(), subagent_id: z.string().optional() }).strict() }).strict(),
+  z.object({ event: z.literal("reasoning_chunk"), ...envelope, data: z.object({ segment_id: z.string(), text: z.string(), final: z.boolean(), subagent_id: z.string().optional() }).strict() }).strict(),
+  z.object({ event: z.literal("tool_call_start"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), args: z.record(z.unknown()) }).strict() }).strict(),
+  z.object({ event: z.literal("tool_call_end"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), result: z.string(), is_error: z.boolean(), rejected: z.boolean() }).strict() }).strict(),
+  z.object({ event: z.literal("agent_done"), ...envelope, data: z.object({ status: z.literal("completed"), usage: z.record(z.unknown()) }).strict() }).strict(),
+  z.object({ event: z.literal("agent_error"), ...envelope, data: z.object({ error_kind: z.string(), message: z.string() }).strict() }).strict(),
 ])
 
 export type AgentEvent = z.infer<typeof agentEventSchema>
