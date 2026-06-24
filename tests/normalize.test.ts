@@ -351,30 +351,29 @@ describe("Normalizer", () => {
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 
-  test("awaiting_approval fans out one tool.awaiting_approval per pending entry", () => {
+  test("each tool_call_awaiting maps to one tool.awaiting_approval", () => {
     const f = makeFeeder(makeNormalizer())
     f.feed(started)
-    const out = f.feed({
-      event: "agent_status",
+    // agent 现发逐工具顶层 tool_call_awaiting（不再打包 pending 数组）。
+    const out1 = f.feed({
+      event: "tool_call_awaiting",
       ...ENV,
-      data: {
-        status: "awaiting_approval",
-        segment_id: "m1",
-        pending: [
-          { tool_id: "t1", name: "fetch", args: { url: "a" } },
-          { tool_id: "t2", name: "write", args: { path: "b" } },
-        ],
-      },
+      data: { segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "a" } },
     })
-    expect(out.map((e) => e.event)).toEqual([
-      "tool.awaiting_approval",
-      "tool.awaiting_approval",
-    ])
-    const first = payloadOf(out[0], "tool.awaiting_approval")
-    expect(first).toMatchObject({ segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "a" } })
-    const second = payloadOf(out[1], "tool.awaiting_approval")
-    expect(second).toMatchObject({ segment_id: "m1", tool_id: "t2", name: "write", args: { path: "b" } })
-    for (const e of out) expect(() => parseSessionEvent(e)).not.toThrow()
+    const out2 = f.feed({
+      event: "tool_call_awaiting",
+      ...ENV,
+      data: { segment_id: "m1", tool_id: "t2", name: "write", args: { path: "b" } },
+    })
+    expect(out1.map((e) => e.event)).toEqual(["tool.awaiting_approval"])
+    expect(out2.map((e) => e.event)).toEqual(["tool.awaiting_approval"])
+    expect(payloadOf(out1[0], "tool.awaiting_approval")).toMatchObject({
+      segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "a" },
+    })
+    expect(payloadOf(out2[0], "tool.awaiting_approval")).toMatchObject({
+      segment_id: "m1", tool_id: "t2", name: "write", args: { path: "b" },
+    })
+    for (const e of [...out1, ...out2]) expect(() => parseSessionEvent(e)).not.toThrow()
   })
 
   // --- todo / subagent lifecycle ---

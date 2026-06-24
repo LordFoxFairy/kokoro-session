@@ -65,17 +65,13 @@ describe("agentEventSchema", () => {
     expect(parsed.data.status).toBe("completed")
   })
 
-  test("accepts awaiting_approval with a pending list", () => {
+  test("accepts tool_call_awaiting (per-tool, top-level)", () => {
     const parsed = agentEventSchema.parse({
-      event: "agent_status",
+      event: "tool_call_awaiting",
       ...ENV,
-      data: {
-        status: "awaiting_approval",
-        segment_id: "m1",
-        pending: [{ tool_id: "t1", name: "fetch", args: { url: "x" } }],
-      },
+      data: { segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "x" } },
     })
-    expect(parsed.event).toBe("agent_status")
+    expect(parsed.event).toBe("tool_call_awaiting")
   })
 
   test("rejects agent_done with a status outside its literal", () => {
