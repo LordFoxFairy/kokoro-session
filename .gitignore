@@ -4,6 +4,8 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.claude/
+.jbeval/
 coverage/
 docs/
 tmp/

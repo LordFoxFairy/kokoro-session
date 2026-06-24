@@ -12,13 +12,13 @@ export type RelayRunInput = {
 }
 
 // 消费某 run 的事件流 → 归一化 → 追加 replay。遇到终态（run.completed/run.failed）收束，
-// 避免连接一直挂等。重复 seq 由 normalizer 去重，断连/空流不崩。
+// 避免连接一直挂等。cursor 是定序唯一源兼去重锚（agent 不再发 seq），断连/空流不崩。
 export async function relayRun(input: RelayRunInput): Promise<void> {
   const stream = runEventsStream(input.runId)
   for await (const item of input.bus.subscribe(stream)) {
     let envelopes: SessionEvent[]
     try {
-      envelopes = input.normalizer.ingest(item.event)
+      envelopes = input.normalizer.ingest(item.event, item.cursor)
     } catch (error) {
       // 跳过单条脏事件而不中断整条流：否则其后的终态永不落 replay，web 该轮停留在「进行中」。
       console.error("skipping dirty agent event", input.runId, error)
