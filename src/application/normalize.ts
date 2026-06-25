@@ -102,6 +102,8 @@ export class Normalizer {
             rejected: event.data.rejected,
             // reject_reason 仅 HITL 拒绝时存在（可选）；透传供 web 渲染拒绝理由。
             reject_reason: event.data.reject_reason,
+            // responded 仅 HITL 人工答复时存在（可选）；透传供 web 渲染「已人工答复」标记。
+            responded: event.data.responded,
           }),
         ]
       case "agent_done":
