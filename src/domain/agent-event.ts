@@ -19,7 +19,7 @@ export const agentEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("reasoning_chunk"), ...envelope, data: z.object({ segment_id: z.string(), text: z.string(), final: z.boolean(), subagent_id: z.string().optional() }).strict() }).strict(),
   z.object({ event: z.literal("tool_call_start"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), args: z.record(z.unknown()), subagent_id: z.string().optional() }).strict() }).strict(),
   z.object({ event: z.literal("tool_call_awaiting"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), args: z.record(z.unknown()), subagent_id: z.string().optional() }).strict() }).strict(),
-  z.object({ event: z.literal("tool_call_end"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), result: z.string(), is_error: z.boolean(), rejected: z.boolean(), reject_reason: z.string().optional(), subagent_id: z.string().optional() }).strict() }).strict(),
+  z.object({ event: z.literal("tool_call_end"), ...envelope, data: z.object({ segment_id: z.string(), tool_id: z.string(), name: z.string(), result: z.string(), is_error: z.boolean(), rejected: z.boolean(), reject_reason: z.string().optional(), responded: z.boolean().optional(), subagent_id: z.string().optional() }).strict() }).strict(),
   z.object({ event: z.literal("agent_done"), ...envelope, data: z.object({ status: z.enum(["completed", "cancelled", "timeout"]), usage: z.record(z.unknown()).optional() }).strict() }).strict(),
   z.object({ event: z.literal("agent_error"), ...envelope, data: z.object({ error_kind: z.string(), message: z.string() }).strict() }).strict(),
 ])
