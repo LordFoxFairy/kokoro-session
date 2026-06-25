@@ -108,6 +108,9 @@ const jsonBodySchema = z.string().transform((raw, ctx) => {
   }
 })
 
+// 体量不设应用层硬顶：session 是本地、CORS 锁定、仅本机 web 前端可达的内部服务，DoS 不在威胁
+// 模型内；且 Node 在未读完请求体时回写响应会破坏 HTTP/1.1 连接（413 到不了客户端）。若将来对公网
+// 暴露，正确做法是反向代理层限体，而非应用层中途拒收。
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []
   for await (const chunk of req) chunks.push(chunk as Buffer)
