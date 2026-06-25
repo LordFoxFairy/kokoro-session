@@ -342,12 +342,14 @@ describe("Normalizer", () => {
         segment_id: "m1",
         tool_id: "t1",
         name: "fetch_url",
-        result: "用户拒绝了工具 fetch_url 的调用。",
+        result: "不安全",
         is_error: false,
         rejected: true,
+        reject_reason: "不安全",
       },
     })
     expect(payloadOf(out[0], "tool.returned").rejected).toBe(true)
+    expect(payloadOf(out[0], "tool.returned").reject_reason).toBe("不安全")
     expect(() => parseSessionEvent(out[0])).not.toThrow()
   })
 

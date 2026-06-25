@@ -100,6 +100,8 @@ export class Normalizer {
             result: event.data.result,
             is_error: event.data.is_error,
             rejected: event.data.rejected,
+            // reject_reason 仅 HITL 拒绝时存在（可选）；透传供 web 渲染拒绝理由。
+            reject_reason: event.data.reject_reason,
           }),
         ]
       case "agent_done":
@@ -169,6 +171,9 @@ export class Normalizer {
             name: data.name,
             subagent_type: data.subagent_type,
             source: data.source as AguiPayload<"subagent.finished">["source"],
+            // 子代理内部异常时透传（可选）：失败有归属，不再被吞成顶层 run.failed。
+            failed: data.failed,
+            error: data.error,
           }),
         ]
       case "custom":
