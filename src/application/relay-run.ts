@@ -1,7 +1,7 @@
 import type { SessionEvent } from "../domain/session-event"
 import type { ReplayStore, StreamProtocol } from "./event-stream"
 import type { Normalizer } from "./normalize"
-import { controlStream, runEventsStream } from "./stream-names"
+import { runEventsStream } from "./stream-names"
 
 export type RelayRunInput = {
   bus: StreamProtocol
@@ -28,8 +28,8 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
       await input.replayStore.append(input.sessionId, envelopes)
     }
     if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
-      // 终态后控制流不再被读取：删除它，避免审批/拒绝指令在 redis 中无限留存。
-      await input.bus.delete(controlStream(input.runId))
+      // 终态即收束 relay：不再读取该 run 的事件流，连接释放。resume/cancel 走共享请求流、
+      // 非 per-run 流，无需在此清理（agent 对未知/终态 run 的迟到控制消息直接丢弃）。
       return
     }
   }

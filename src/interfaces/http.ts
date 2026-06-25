@@ -5,7 +5,7 @@ import { z, ZodError } from "zod"
 import type { ReplayStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl } from "../application/send-run-control"
 import { startRun } from "../application/start-run"
-import { parseRunControlArgs, parseRunControlDecision } from "../domain/run-control"
+import { runControlBodySchema } from "../domain/run-control"
 import { streamSession } from "./sse-endpoint"
 
 const allowedBrowserOrigins = new Set([
@@ -96,13 +96,32 @@ async function handleStartRun(ctx: RouteContext): Promise<void> {
   ctx.res.end(JSON.stringify(result))
 }
 
-// HITL 反向通道：web 批准/拒绝待批工具(approve/reject) 或放弃整个 run(cancel) → 写 control 流。
+// 请求体 JSON 解析：决策数组（含 edit 的 edited_action）可大于 query 串上限，故走 body。非法
+// JSON 经 Zod 抛 ZodError → 顶层 400；空体退化为 {} 交判别联合报缺 kind。
+const jsonBodySchema = z.string().transform((raw, ctx) => {
+  if (raw.length === 0) return {}
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "body is not valid JSON" })
+    return z.NEVER
+  }
+})
+
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString("utf8")
+}
+
+// HITL 反向通道：web 批准/拒绝待批工具或放弃整个 run → 翻译成 run.resume/run.cancel 发请求流。
+// 同帧多工具须在一条 run.resume 内携全部决策（agent 按 tool_id 一一对齐，缺/多即 fail-loud）。
 async function handleRunControl(ctx: RouteContext): Promise<void> {
-  // 非法/缺失 decision、非法 args（urlencoded JSON，仅 approve 有意义）经 Zod 抛 ZodError → 顶层 400。
-  const decision = parseRunControlDecision(ctx.url.searchParams.get("decision"))
-  const args = parseRunControlArgs(ctx.url.searchParams.get("args"))
+  const body = runControlBodySchema.parse(jsonBodySchema.parse(await readBody(ctx.req)))
   await sendRunControl(
-    { runId: ctx.params.runId!, decision, args },
+    body.kind === "run.cancel"
+      ? { kind: "run.cancel", runId: ctx.params.runId! }
+      : { kind: "run.resume", runId: ctx.params.runId!, decisions: body.decisions },
     { bus: ctx.deps.bus },
   )
   ctx.res.statusCode = 202
