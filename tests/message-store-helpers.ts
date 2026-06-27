@@ -52,3 +52,14 @@ export async function assertBehaviour(store: MessageStore): Promise<void> {
     "c3",
   ])
 }
+
+// 并发幂等：多 pod / relay 重投会并发 append 同一批事件。须无丢、无重、不抛。
+// 不断言顺序——并发下各键归属哪次写是竞态的，且 web 按 per-run seq 重排，存储序无关紧要。
+export async function assertConcurrentIdempotent(store: MessageStore): Promise<void> {
+  const sid = "ses_concurrent"
+  const batch = [stored(sid, "k1", "ce0"), stored(sid, "k2", "ce1"), stored(sid, "k3", "ce2")]
+  await Promise.all([store.append(sid, batch), store.append(sid, batch), store.append(sid, batch)])
+  const ids = (await store.read(sid)).map((s) => s.event.event_id)
+  expect(ids.length).toBe(3) // 无重复
+  expect(new Set(ids)).toEqual(new Set(["ce0", "ce1", "ce2"])) // 无丢失
+}

@@ -8,7 +8,7 @@ import {
   MemoryMessageStore,
   SqliteMessageStore,
 } from "../src/infrastructure/message-store"
-import { assertBehaviour, stored } from "./message-store-helpers"
+import { assertBehaviour, assertConcurrentIdempotent, stored } from "./message-store-helpers"
 
 describe("MessageStore 行为矩阵", () => {
   test("memory", async () => {
@@ -17,6 +17,16 @@ describe("MessageStore 行为矩阵", () => {
 
   test("sqlite", async () => {
     await assertBehaviour(new SqliteMessageStore(new Database(":memory:")))
+  })
+})
+
+describe("MessageStore 并发幂等", () => {
+  test("memory", async () => {
+    await assertConcurrentIdempotent(new MemoryMessageStore())
+  })
+
+  test("sqlite", async () => {
+    await assertConcurrentIdempotent(new SqliteMessageStore(new Database(":memory:")))
   })
 })
 

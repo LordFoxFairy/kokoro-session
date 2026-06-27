@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { MongoClient } from "mongodb"
 
 import { makeMessageStore, MongoMessageStore } from "../src/infrastructure/message-store"
-import { assertBehaviour, stored } from "./message-store-helpers"
+import { assertBehaviour, assertConcurrentIdempotent, stored } from "./message-store-helpers"
 
 // 无 mongo 时整组干净 skip（不 fail）：先探测连接，连不上直接跳过（与 stream-redis.test 同约定）。
 const MONGO_URL = process.env.KOKORO_TEST_MONGO_URL ?? "mongodb://127.0.0.1:27117"
@@ -32,6 +32,16 @@ describe("MongoMessageStore", () => {
     const store = new MongoMessageStore(client as MongoClient, dbName)
     try {
       await assertBehaviour(store)
+    } finally {
+      await (client as MongoClient).db(dbName).dropDatabase()
+    }
+  })
+
+  itOrSkip("并发重投同批事件：无丢/无重/不抛（多 pod 幂等）", async () => {
+    const dbName = `kokoro_test_${Date.now()}_concurrent`
+    const store = new MongoMessageStore(client as MongoClient, dbName)
+    try {
+      await assertConcurrentIdempotent(store)
     } finally {
       await (client as MongoClient).db(dbName).dropDatabase()
     }
