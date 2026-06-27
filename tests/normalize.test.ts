@@ -158,6 +158,16 @@ describe("Normalizer", () => {
     expect(seqs).toEqual(sorted)
   })
 
+  // 回归：真 RedisStream 游标是 `<ms>-<seq>`（非定宽数字串）。此前所有用例都用 MemoryStream 形态
+  // 的数字游标，漏掉这一格——Number("1782540325240-0")=NaN 会让每条事件被当脏事件丢弃、redis 后端
+  // SSE 全断（真·跨进程 e2e 抓出）。seq 取 `-` 前首段（毫秒，单调可序）；全串仍作去重/event_id。
+  test("derives a finite seq from a real Redis stream cursor `<ms>-<seq>` (MemoryStream-only blind spot)", () => {
+    const out = makeNormalizer().ingest(started, "1782540325240-0")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.every((e) => Number.isFinite(e.seq))).toBe(true)
+    expect(out[0]?.seq).toBe(1782540325240)
+  })
+
   test("cursor-derived seq is carried as a first-class field", () => {
     const f = makeFeeder(makeNormalizer())
     const out = f.at(started, 0)

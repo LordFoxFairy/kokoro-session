@@ -29,8 +29,11 @@ export class Normalizer {
     // 入站严格校验：缺字段 / 多余键 / 未知 event 直接抛，不将脏事件归一化进 replay。
     const event = agentEventSchema.parse(raw)
 
-    // seq 由 transport cursor 派生（cursor 是定宽数字串，唯一定序源）。
-    const seq = Number(cursor)
+    // seq 由 transport cursor 派生：cursor 是 transport 原生格式——MemoryStream 是定宽数字串，
+    // RedisStream 是原生 stream id `<ms>-<seq>`（resume 的 XREAD 须用原格式，不能伪造成数字）。
+    // 取首段（`-` 前）得单调可序数：memory 串无 `-` → 整串；redis → 毫秒部分（同 ms 并列、由到达序稳定）。
+    // 全串仍作去重锚（seenCursors）与 event_id；否则 Number(redis cursor) = NaN，每条事件被当脏事件丢弃。
+    const seq = Number(cursor.split("-")[0])
 
     const envelopes = this.mapEvent(event)
 
