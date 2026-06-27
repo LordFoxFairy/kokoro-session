@@ -20,3 +20,11 @@ export interface StreamProtocol {
 export interface ReplayStore {
   append(sessionId: string, events: SessionEvent[]): Promise<void> | void
 }
+
+// 会话消息的持久存储（sqlite 默认本地落盘 / mongo 跨 pod / memory 易失）：把长期历史从 redis 卸到
+// DB，redis 退为实时总线。append 落库（按 event_id 幂等去重）；read 按 (seq, 到达序) 有序回放，
+// afterSeq 支持增量/分页。read 的「哪份数据」由 sessionId 选，与 redis 的 stream key 同一身份维度。
+export interface MessageStore {
+  append(sessionId: string, events: SessionEvent[]): Promise<void>
+  read(sessionId: string, opts?: { afterSeq?: number; limit?: number }): Promise<SessionEvent[]>
+}
