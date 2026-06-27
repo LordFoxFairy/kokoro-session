@@ -8,10 +8,12 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "start": "bun run src/main.ts",
-    "dev": "bun --watch src/main.ts"
+    "dev": "bun --watch src/main.ts",
+    "e2e:redis-sqlite": "bash scripts/redis-sqlite-e2e.sh"
   },
   "dependencies": {
     "ioredis": "^5.4.1",
+    "mongodb": "6.3.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

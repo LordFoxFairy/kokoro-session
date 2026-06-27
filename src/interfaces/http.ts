@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { z, ZodError } from "zod"
 
-import type { ReplayStore, StreamProtocol } from "../application/event-stream"
+import type { MessageStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl } from "../application/send-run-control"
 import { startRun } from "../application/start-run"
 import { runControlBodySchema } from "../domain/run-control"
@@ -26,7 +26,7 @@ function applyBrowserHeaders(req: IncomingMessage, res: ServerResponse): void {
 
 export type BuildServerDependencies = {
   bus: StreamProtocol
-  replayStore: ReplayStore
+  messageStore: MessageStore
 }
 
 // 入站 query 在 interfaces 层一次性 Zod 解析：空 input → ZodError → 顶层 400；.strip 兜底滤未知键。
@@ -63,7 +63,8 @@ const routes: Route[] = [
   {
     method: "GET",
     pattern: /^\/sessions\/(?<sessionId>[^/]+)\/stream$/,
-    handle: (ctx) => streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.params.sessionId!),
+    handle: (ctx) =>
+      streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.deps.messageStore, ctx.params.sessionId!),
   },
   {
     method: "POST",
