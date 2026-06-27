@@ -1,7 +1,7 @@
 import { z } from "zod"
 
 import { dispatchRelays } from "./application/dispatch-relays"
-import { makeReplayStore } from "./infrastructure/replay-store"
+import { makeMessageStore } from "./infrastructure/message-store"
 import { makeStream } from "./infrastructure/stream"
 import { buildServer } from "./interfaces/http"
 
@@ -17,13 +17,13 @@ export function resolvePort(raw: string | undefined): number {
 function main(): void {
   const port = resolvePort(process.env.KOKORO_SESSION_PORT)
   const bus = makeStream()
-  const replayStore = makeReplayStore(bus)
+  const messageStore = makeMessageStore()
 
-  void dispatchRelays(bus, replayStore).catch((error: unknown) => {
+  void dispatchRelays(bus, messageStore).catch((error: unknown) => {
     console.error("dispatch loop crashed", error)
   })
 
-  const server = buildServer({ bus, replayStore })
+  const server = buildServer({ bus, messageStore })
   server.on("error", (error: unknown) => {
     console.error(`kokoro-session failed to bind :${port}`, error)
     process.exit(1)

@@ -11,14 +11,11 @@ export type StreamItem = {
 }
 
 export interface StreamProtocol {
-  publish(stream: string, event: unknown): Promise<string>
+  // maxlen：有界流（如会话 live 总线）发布即按 MAXLEN 近似裁剪，老历史归 MessageStore 持久；
+  // 省略则不裁剪（请求流 / per-run 事件流须留全量供 resume 与 relay 重读）。
+  publish(stream: string, event: unknown, opts?: { maxlen?: number }): Promise<string>
   subscribe(stream: string, fromCursor?: string): AsyncIterable<StreamItem>
   delete(stream: string): Promise<void>
-}
-
-// 会话级 AGUI 事件的持久回放，由 StreamProtocol 背书（memory/redis 可换）。
-export interface ReplayStore {
-  append(sessionId: string, events: SessionEvent[]): Promise<void> | void
 }
 
 // 一条持久历史条目：领域事件 + 它的 transport cursor（= SSE id 轴，会话级单调、续点锚）。

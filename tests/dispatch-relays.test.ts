@@ -3,13 +3,15 @@ import { describe, expect, test } from "bun:test"
 import { dispatchRelays } from "../src/application/dispatch-relays"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
-import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
+import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 
-// relayRun 把归一化信封 append 到 replayStream(sessionId)；从该 bus 流回读还原已落盘的 replay。
-async function readReplay(bus: MemoryStream, sessionId: string): Promise<SessionEvent[]> {
-  const items = await bus.readAll(replayStream(sessionId))
-  return items.map((item) => parseSessionEvent(item.event))
+// relayRun 把归一化信封持久到 MessageStore（长期真源）；从中回读还原已落库的会话事件。
+async function readReplay(
+  store: MemoryMessageStore,
+  sessionId: string,
+): Promise<SessionEvent[]> {
+  return (await store.read(sessionId)).map((stored) => parseSessionEvent(stored.event))
 }
 
 // 轮询直到 replay 出现终态（dispatch 循环活着才可能发生），超时返回当前快照。
@@ -31,7 +33,7 @@ async function waitForTerminal(
 describe("dispatchRelays", () => {
   test("a malformed run.request is skipped without killing the dispatch loop", async () => {
     const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
+    const messageStore = new MemoryMessageStore()
     const runId = "run_after_dirty"
 
     // 先灌一条脏请求（多余键 + 缺必填），再灌合法请求——脏请求不得杀死调度循环。
@@ -60,9 +62,9 @@ describe("dispatchRelays", () => {
     })
 
     // 调度循环常驻不返回；悬挂运行后轮询 replay 验证合法 run 仍被调度。
-    void dispatchRelays(bus, replayStore).catch(() => {})
+    void dispatchRelays(bus, messageStore).catch(() => {})
 
-    const events = await waitForTerminal(() => readReplay(bus, "ses_dispatch"), 1500)
+    const events = await waitForTerminal(() => readReplay(messageStore, "ses_dispatch"), 1500)
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
       "run.created",

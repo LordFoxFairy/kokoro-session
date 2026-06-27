@@ -30,7 +30,11 @@ export class MemoryStream implements StreamProtocol {
     this.cursorWidth = options?.cursorWidth ?? CURSOR_WIDTH
   }
 
-  async publish(stream: string, event: unknown): Promise<string> {
+  // maxlen 第三参为对齐 StreamProtocol；单进程内存实现有意忽略（理由见下），故标注 unused。
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async publish(stream: string, event: unknown, _opts?: { maxlen?: number }): Promise<string> {
+    // 单进程内存实现忽略 maxlen：无 redis RAM 负担，且 readAll 全量历史被测试依赖；live 总线正确性
+    // 由 SSE「DB 历史 + live tail」桥兜底，不依赖裁剪。
     const cursor = String(++this.counter).padStart(this.cursorWidth, "0")
     const items = this.streams.get(stream) ?? []
     items.push({ cursor, event })
@@ -117,9 +121,14 @@ export class RedisStream implements StreamProtocol {
     await this.redis.ping()
   }
 
-  async publish(stream: string, event: unknown): Promise<string> {
+  async publish(stream: string, event: unknown, opts?: { maxlen?: number }): Promise<string> {
     await this.ensureConnected(this.redis)
-    const id = await this.redis.xadd(stream, "*", REDIS_FIELD, JSON.stringify(event))
+    const payload = JSON.stringify(event)
+    // MAXLEN ~ N：近似裁剪（不强制精确，省 CPU）；老历史由 MessageStore 持久，redis 退为有界 live 窗口。
+    const id =
+      opts?.maxlen === undefined
+        ? await this.redis.xadd(stream, "*", REDIS_FIELD, payload)
+        : await this.redis.xadd(stream, "MAXLEN", "~", String(opts.maxlen), "*", REDIS_FIELD, payload)
     if (!id) throw new Error("redis xadd returned no id")
     return id
   }

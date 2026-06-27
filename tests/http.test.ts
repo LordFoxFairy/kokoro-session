@@ -7,14 +7,33 @@ import { relayRun } from "../src/application/relay-run"
 import { startRun } from "../src/application/start-run"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { runRequestSchema } from "../src/domain/run-request"
-import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
+import type { SessionEvent } from "../src/domain/session-event"
+import { LIVE_STREAM_MAXLEN, liveStream } from "../src/infrastructure/live-bus"
+import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 import { buildServer } from "../src/interfaces/http"
 
 function makeDeps() {
   const bus = new MemoryStream()
-  const replayStore = makeReplayStore(bus)
-  return { bus, replayStore }
+  const messageStore = new MemoryMessageStore()
+  return { bus, messageStore }
+}
+
+// 模拟 relay：先发布 live（拿 cursor）再持久 DB，返回各事件的 transport cursor（= SSE id 轴）。
+async function seed(
+  deps: ReturnType<typeof makeDeps>,
+  sessionId: string,
+  events: SessionEvent[],
+): Promise<string[]> {
+  const cursors: string[] = []
+  for (const event of events) {
+    const cursor = await deps.bus.publish(liveStream(sessionId), event, {
+      maxlen: LIVE_STREAM_MAXLEN,
+    })
+    await deps.messageStore.append(sessionId, [{ cursor, event }])
+    cursors.push(cursor)
+  }
+  return cursors
 }
 
 let server: ReturnType<typeof buildServer>
@@ -95,7 +114,7 @@ describe("GET /sessions/:id/stream", () => {
       { sessionId, conversationId: sessionId, runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ bus: deps.bus, replayStore: deps.replayStore, normalizer, sessionId, runId })
+    await relayRun({ bus: deps.bus, messageStore: deps.messageStore, normalizer, sessionId, runId })
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: { accept: "text/event-stream" },
@@ -128,8 +147,8 @@ describe("GET /sessions/:id/stream", () => {
       timestamp: "2026-05-30T00:00:00.000Z",
     }
 
-    // 先落一条历史事件 → SSE 打开时快照非空。
-    await deps.replayStore.append(sessionId, [
+    // 先落一条历史事件（DB 持久）→ SSE 打开时历史快照非空。
+    await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
@@ -149,24 +168,22 @@ describe("GET /sessions/:id/stream", () => {
       signal: AbortSignal.timeout(3000),
     })
 
-    // 连接建立后再追加，确保这些事件不属于初始快照——正是旧实现会漏掉的那段。
+    // 连接建立后只发到 live 总线（不入历史），确保这些事件必须靠实时 tail 才能到达——正是要验证的那段。
     await new Promise((resolve) => setTimeout(resolve, 50))
-    await deps.replayStore.append(sessionId, [
-      {
-        event: "message.delta",
-        event_id: "evt_2",
-        seq: 1,
-        ...base,
-        payload: { segment_id: `${runId}:m1`, delta: "你好", role: "assistant" },
-      },
-      {
-        event: "run.completed",
-        event_id: "evt_3",
-        seq: 2,
-        ...base,
-        payload: { run_id: runId, status: "completed" },
-      },
-    ])
+    await deps.bus.publish(liveStream(sessionId), {
+      event: "message.delta",
+      event_id: "evt_2",
+      seq: 1,
+      ...base,
+      payload: { segment_id: `${runId}:m1`, delta: "你好", role: "assistant" },
+    })
+    await deps.bus.publish(liveStream(sessionId), {
+      event: "run.completed",
+      event_id: "evt_3",
+      seq: 2,
+      ...base,
+      payload: { run_id: runId, status: "completed" },
+    })
 
     const text = await readSomeSse(res)
     expect(text).toContain("event: session.created") // 历史回放
@@ -187,7 +204,7 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    await deps.replayStore.append(sessionId, [
+    await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
@@ -201,17 +218,16 @@ describe("GET /sessions/:id/stream", () => {
         },
       },
     ])
-    // 损坏的 Redis 条目经 decodeFields 兜底后即为 null：直接投喂 null 到回放流复现该形态。
-    await deps.bus.publish(replayStream(sessionId), null)
-    await deps.replayStore.append(sessionId, [
-      {
-        event: "run.completed",
-        event_id: "evt_2",
-        seq: 1,
-        ...base,
-        payload: { run_id: runId, status: "completed" },
-      },
-    ])
+    // 损坏的 Redis 条目经 decodeFields 兜底后即为 null：直接投喂 null 到 live 总线复现该形态，
+    // 紧随其后的合法终态须照常 tail 交付——单条脏数据不得炸断 SSE 实时流。
+    await deps.bus.publish(liveStream(sessionId), null)
+    await deps.bus.publish(liveStream(sessionId), {
+      event: "run.completed",
+      event_id: "evt_2",
+      seq: 1,
+      ...base,
+      payload: { run_id: runId, status: "completed" },
+    })
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: { accept: "text/event-stream" },
@@ -236,7 +252,7 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    await deps.replayStore.append(sessionId, [
+    const cursors = await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
@@ -257,9 +273,6 @@ describe("GET /sessions/:id/stream", () => {
         payload: { run_id: runId, status: "completed" },
       },
     ])
-    const transportCursors = (
-      await deps.bus.readAll(replayStream(sessionId))
-    ).map((item) => item.cursor)
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: { accept: "text/event-stream" },
@@ -267,8 +280,8 @@ describe("GET /sessions/:id/stream", () => {
     })
     const text = await readSomeSse(res)
 
-    // SSE id = replay 流 transport cursor（全局单调、可作续点），而非 per-run 域 cursor。
-    expect(text).toContain(`id: ${transportCursors[0]}`)
+    // SSE id = transport cursor（全局单调、可作续点），而非 per-run 域 cursor。
+    expect(text).toContain(`id: ${cursors[0]}`)
     expect(text).not.toContain(`id: ${runId}:0001`)
   })
 
@@ -284,7 +297,7 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    await deps.replayStore.append(sessionId, [
+    const cursors = await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
@@ -312,14 +325,11 @@ describe("GET /sessions/:id/stream", () => {
         payload: { run_id: runId, status: "completed" },
       },
     ])
-    const transportCursors = (
-      await deps.bus.readAll(replayStream(sessionId))
-    ).map((item) => item.cursor)
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: {
         accept: "text/event-stream",
-        "last-event-id": transportCursors[0] as string,
+        "last-event-id": cursors[0] as string,
       },
       signal: AbortSignal.timeout(2000),
     })
@@ -343,7 +353,7 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    await deps.replayStore.append(sessionId, [
+    await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",

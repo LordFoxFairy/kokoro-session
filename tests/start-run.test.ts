@@ -6,13 +6,15 @@ import { startRun } from "../src/application/start-run"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
 import { runRequestSchema } from "../src/domain/run-request"
-import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
+import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 
-// relayRun 把归一化信封 append 到 replayStream(sessionId)；从该 bus 流回读还原已落盘的 replay。
-async function readReplay(bus: MemoryStream, sessionId: string): Promise<SessionEvent[]> {
-  const items = await bus.readAll(replayStream(sessionId))
-  return items.map((item) => parseSessionEvent(item.event))
+// relayRun 把归一化信封持久到 MessageStore（长期真源）；从中回读还原已落库的会话事件。
+async function readReplay(
+  store: MemoryMessageStore,
+  sessionId: string,
+): Promise<SessionEvent[]> {
+  return (await store.read(sessionId)).map((stored) => parseSessionEvent(stored.event))
 }
 
 describe("startRun", () => {
@@ -75,7 +77,7 @@ describe("startRun", () => {
 describe("relayRun", () => {
   test("normalizes agent events from the run stream into AGUI replay", async () => {
     const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
+    const messageStore = new MemoryMessageStore()
     const sessionId = "ses_10"
     const conversationId = "conv_10"
     const runId = "run_relay"
@@ -104,9 +106,9 @@ describe("relayRun", () => {
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
 
-    await relayRun({ bus, replayStore, normalizer, sessionId, runId })
+    await relayRun({ bus, messageStore, normalizer, sessionId, runId })
 
-    const events = await readReplay(bus, sessionId)
+    const events = await readReplay(messageStore, sessionId)
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
@@ -119,7 +121,7 @@ describe("relayRun", () => {
 
   test("relay stops at terminal; session.created is synthesized only once across started events", async () => {
     const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
+    const messageStore = new MemoryMessageStore()
     const runId = "run_dup"
     const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
@@ -131,9 +133,9 @@ describe("relayRun", () => {
       { sessionId: "ses_dup", conversationId: "ses_dup", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dup", runId })
+    await relayRun({ bus, messageStore, normalizer, sessionId: "ses_dup", runId })
 
-    const events = await readReplay(bus, "ses_dup")
+    const events = await readReplay(messageStore, "ses_dup")
     expect(events.map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
@@ -144,7 +146,7 @@ describe("relayRun", () => {
 
   test("a dirty event mid-stream is skipped and the terminal still lands (skip-and-continue)", async () => {
     const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
+    const messageStore = new MemoryMessageStore()
     const runId = "run_dirty_mid"
     const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
@@ -165,9 +167,9 @@ describe("relayRun", () => {
       { sessionId: "ses_dirty", conversationId: "ses_dirty", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_dirty", runId })
+    await relayRun({ bus, messageStore, normalizer, sessionId: "ses_dirty", runId })
 
-    expect((await readReplay(bus, "ses_dirty")).map((e) => e.event)).toEqual([
+    expect((await readReplay(messageStore, "ses_dirty")).map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
       "message.completed",
@@ -177,7 +179,7 @@ describe("relayRun", () => {
 
   test("relay terminates on run.failed", async () => {
     const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
+    const messageStore = new MemoryMessageStore()
     const runId = "run_fail"
     const env = { request_id: runId, timestamp: 1700000000 }
     const stream = runEventsStream(runId)
@@ -191,9 +193,9 @@ describe("relayRun", () => {
       { sessionId: "ses_fail", conversationId: "ses_fail", runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_fail", runId })
+    await relayRun({ bus, messageStore, normalizer, sessionId: "ses_fail", runId })
 
-    expect((await readReplay(bus, "ses_fail")).map((e) => e.event)).toEqual([
+    expect((await readReplay(messageStore, "ses_fail")).map((e) => e.event)).toEqual([
       "session.created",
       "run.created",
       "run.failed",
