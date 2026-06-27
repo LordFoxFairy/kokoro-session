@@ -5,11 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
 import { startRun } from "../src/application/start-run"
-import {
-  controlStream,
-  REQUESTS_STREAM,
-  runEventsStream,
-} from "../src/application/stream-names"
+import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { runRequestSchema } from "../src/domain/run-request"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
 import { MemoryStream } from "../src/infrastructure/stream"
@@ -438,65 +434,101 @@ describe("HTTP error envelope", () => {
 })
 
 describe("POST run control (HITL)", () => {
-  test("202 and writes the decision to the control stream", async () => {
+  function postControl(runId: string, body: unknown): Promise<Response> {
+    return fetch(`${baseUrl}/sessions/s1/runs/${runId}/control`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })
+  }
+
+  test("202 and writes run.resume with the per-tool decision to the requests stream", async () => {
     const deps = makeDeps()
     await listen(deps)
-    const res = await fetch(
-      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve`,
-      { method: "POST" },
-    )
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "approve", tool_id: "call-A" }],
+    })
     expect(res.status).toBe(202)
-    const items = await deps.bus.readAll(controlStream("run_1"))
+    const items = await deps.bus.readAll(REQUESTS_STREAM)
     expect(items).toHaveLength(1)
-    expect((items[0]?.event as { decision: string }).decision).toBe("approve")
+    expect(items[0]?.event).toEqual({
+      kind: "run.resume",
+      run_id: "run_1",
+      decisions: [{ type: "approve", tool_id: "call-A" }],
+    })
   })
 
-  test("202 and writes a cancel decision (run abandon → worker cancels the run)", async () => {
+  test("202 and writes run.cancel (run abandon → agent cancels the run)", async () => {
     const deps = makeDeps()
     await listen(deps)
-    const res = await fetch(
-      `${baseUrl}/sessions/s1/runs/run_1/control?decision=cancel`,
-      { method: "POST" },
-    )
+    const res = await postControl("run_1", { kind: "run.cancel" })
     expect(res.status).toBe(202)
-    const items = await deps.bus.readAll(controlStream("run_1"))
-    expect((items[0]?.event as { decision: string }).decision).toBe("cancel")
+    const items = await deps.bus.readAll(REQUESTS_STREAM)
+    expect(items[0]?.event).toEqual({ kind: "run.cancel", run_id: "run_1" })
   })
 
-  test("202 relays approve with edited tool args to the control stream", async () => {
+  test("202 carries same-frame multi-tool decisions in one resume (approve A + reject B)", async () => {
     const deps = makeDeps()
     await listen(deps)
-    const args = { x: "edited://by-user" }
-    const res = await fetch(
-      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve&args=${encodeURIComponent(JSON.stringify(args))}`,
-      { method: "POST" },
-    )
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [
+        { type: "approve", tool_id: "call-A" },
+        { type: "reject", tool_id: "call-B", message: "no" },
+      ],
+    })
     expect(res.status).toBe(202)
-    const items = await deps.bus.readAll(controlStream("run_1"))
-    expect((items[0]?.event as { args: unknown }).args).toEqual(args)
+    const items = await deps.bus.readAll(REQUESTS_STREAM)
+    expect((items[0]?.event as { decisions: unknown[] }).decisions).toHaveLength(2)
   })
 
-  test("400 for malformed args JSON (client input error, fails loud)", async () => {
+  test("202 relays an edit decision with edited_action", async () => {
     const deps = makeDeps()
     await listen(deps)
-    const res = await fetch(
-      `${baseUrl}/sessions/s1/runs/run_1/control?decision=approve&args=not-json`,
-      { method: "POST" },
-    )
+    const edited = { name: "bash", args: { cmd: "ls" } }
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "edit", tool_id: "call-A", edited_action: edited }],
+    })
+    expect(res.status).toBe(202)
+    const items = await deps.bus.readAll(REQUESTS_STREAM)
+    expect((items[0]?.event as { decisions: { edited_action: unknown }[] }).decisions[0]?.edited_action).toEqual(edited)
+  })
+
+  test("400 for malformed JSON body (client input error, fails loud)", async () => {
+    await listen(makeDeps())
+    const res = await fetch(`${baseUrl}/sessions/s1/runs/run_1/control`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    })
     expect(res.status).toBe(400)
   })
 
-  // 非法 decision 是客户端入参错误：经 Zod 校验落 400，JSON 错误体定位到 decision 字段。
-  test("400 with a JSON decision error for an invalid decision", async () => {
+  test("400 for an invalid decision type (strict discriminated union)", async () => {
     await listen(makeDeps())
-    const res = await fetch(
-      `${baseUrl}/sessions/s1/runs/run_1/control?decision=bogus`,
-      { method: "POST" },
-    )
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "bogus", tool_id: "call-A" }],
+    })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toContain("decision")
+  })
+
+  test("400 for a decision missing tool_id (multi-tool attribution is required)", async () => {
+    await listen(makeDeps())
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "approve" }],
+    })
+    expect(res.status).toBe(400)
+  })
+
+  test("400 for an empty decisions array (a resume must decide at least one tool)", async () => {
+    await listen(makeDeps())
+    const res = await postControl("run_1", { kind: "run.resume", decisions: [] })
+    expect(res.status).toBe(400)
   })
 })
 

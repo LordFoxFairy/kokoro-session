@@ -1,41 +1,54 @@
 import { z } from "zod"
 
-// approve/reject 针对待批工具;cancel 放弃整个 run(worker 取消 run task,解阻塞所有待批门)。
-export const runControlDecisionSchema = z.enum(["approve", "reject", "cancel"])
-
-export type RunControlDecision = z.infer<typeof runControlDecisionSchema>
-
-// 工具参数为 tool 专属、session 不知其形状：以 record 透传，真实校验在 agent 的 Pydantic 边界。
-export const runControlArgsSchema = z.record(z.string(), z.unknown())
-
-// HITL 反向通道控制信封（session 写出到 kokoro:run:<id>:control）。args 仅 approve 有意义：
-// 用户在审批暂停时编辑后的工具参数，整体替换模型原参数。
-export const controlEventSchema = z
+// HITL 审批决策：镜像 kokoro-agent inbound.py 的 ResumeDecision 判别联合。各型按 type 判别、恰好
+// 携带其必需字段；每个决策显式带 tool_id（同帧多工具的归属键，agent 据此重排对齐到 pending 顺序）。
+const approveDecisionSchema = z
+  .object({ type: z.literal("approve"), tool_id: z.string().min(1) })
+  .strict()
+const editDecisionSchema = z
   .object({
-    kind: z.literal("control"),
-    decision: runControlDecisionSchema,
-    args: runControlArgsSchema.optional(),
+    type: z.literal("edit"),
+    tool_id: z.string().min(1),
+    // 用户改后的工具调用，整体替换模型原参数；具体形状由 agent Pydantic 边界校验，session 仅透传。
+    edited_action: z.record(z.string(), z.unknown()),
   })
   .strict()
+const rejectDecisionSchema = z
+  .object({ type: z.literal("reject"), tool_id: z.string().min(1), message: z.string() })
+  .strict()
+const respondDecisionSchema = z
+  .object({ type: z.literal("respond"), tool_id: z.string().min(1), message: z.string() })
+  .strict()
 
-// 边界入参（HTTP query 等）解析：错误体定位到 decision 字段，非法/缺失抛 ZodError。
-const decisionInputSchema = z.object({ decision: runControlDecisionSchema })
-export function parseRunControlDecision(raw: string | null): RunControlDecision {
-  return decisionInputSchema.parse({ decision: raw }).decision
-}
+export const resumeDecisionSchema = z.discriminatedUnion("type", [
+  approveDecisionSchema,
+  editDecisionSchema,
+  rejectDecisionSchema,
+  respondDecisionSchema,
+])
+export type ResumeDecision = z.infer<typeof resumeDecisionSchema>
 
-// 可选 args query（urlencoded JSON）解析：非法 JSON / 非对象抛 ZodError → 顶层归 400。
-const argsInputSchema = z
-  .string()
-  .transform((raw, ctx) => {
-    try {
-      return JSON.parse(raw) as unknown
-    } catch {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "args is not valid JSON", path: ["args"] })
-      return z.NEVER
-    }
+// 出站到 agent 请求流（kokoro:runs:requests，与 run.request 同流）的 HITL 反向消息。run_id 由
+// session 据 URL 注入。run.resume 携逐工具决策恢复暂停；run.cancel 放弃整个 run。
+export const runResumeSchema = z
+  .object({
+    kind: z.literal("run.resume"),
+    run_id: z.string().min(1),
+    decisions: z.array(resumeDecisionSchema).min(1),
   })
-  .pipe(runControlArgsSchema)
-export function parseRunControlArgs(raw: string | null): Record<string, unknown> | undefined {
-  return raw === null ? undefined : argsInputSchema.parse(raw)
-}
+  .strict()
+export const runCancelSchema = z
+  .object({ kind: z.literal("run.cancel"), run_id: z.string().min(1) })
+  .strict()
+
+// HTTP 入站体（web POST /control 的 JSON body）：与出站消息同形但不含 run_id（由路径参数注入）。
+export const runControlBodySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("run.cancel") }).strict(),
+  z
+    .object({
+      kind: z.literal("run.resume"),
+      decisions: z.array(resumeDecisionSchema).min(1),
+    })
+    .strict(),
+])
+export type RunControlBody = z.infer<typeof runControlBodySchema>

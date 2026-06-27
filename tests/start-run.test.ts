@@ -1,14 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { z } from "zod"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
 import { startRun } from "../src/application/start-run"
-import {
-  controlStream,
-  REQUESTS_STREAM,
-  runEventsStream,
-} from "../src/application/stream-names"
+import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
 import { runRequestSchema } from "../src/domain/run-request"
 import { makeReplayStore, replayStream } from "../src/infrastructure/replay-store"
@@ -19,15 +14,6 @@ async function readReplay(bus: MemoryStream, sessionId: string): Promise<Session
   const items = await bus.readAll(replayStream(sessionId))
   return items.map((item) => parseSessionEvent(item.event))
 }
-
-// Local schema mirroring the HITL control envelope (approve/reject针对待批工具, cancel放弃整个 run).
-// 待 SE-3 的 src/domain/run-control.ts 合并后可切换为复用,届时删除此内联 schema。
-const controlEventSchema = z
-  .object({
-    kind: z.literal("control"),
-    decision: z.enum(["approve", "reject", "cancel"]),
-  })
-  .strict()
 
 describe("startRun", () => {
   test("generates a run id and publishes a valid run.request to the requests stream", async () => {
@@ -212,52 +198,5 @@ describe("relayRun", () => {
       "run.created",
       "run.failed",
     ])
-  })
-
-  test("deletes the control stream on terminal so HITL decisions do not linger", async () => {
-    const bus = new MemoryStream()
-    const replayStore = makeReplayStore(bus)
-    const runId = "run_ctrl_cleanup"
-    const stream = runEventsStream(runId)
-    // 模拟一条遗留的审批指令还挂在控制流上;先过 schema 确保构造的是合法 control 信封。
-    const lingering = controlEventSchema.parse({ kind: "control", decision: "approve" })
-    const env = { request_id: runId, timestamp: 1700000000 }
-    await bus.publish(controlStream(runId), lingering)
-    await bus.publish(stream, { event: "agent_status", ...env, data: { status: "started" } })
-    await bus.publish(stream, {
-      event: "agent_done",
-      ...env,
-      data: { status: "completed", usage: {} },
-    })
-    const normalizer = new Normalizer(
-      { sessionId: "ses_ctrl", conversationId: "ses_ctrl", runId },
-      { now: () => new Date("2026-05-30T00:00:00.000Z") },
-    )
-    await relayRun({ bus, replayStore, normalizer, sessionId: "ses_ctrl", runId })
-
-    expect(await bus.readAll(controlStream(runId))).toEqual([])
-  })
-})
-
-// 待 SE-3 的 run-control schema 合并后,这些断言可切换为复用 src/domain/run-control.ts。
-describe("control envelope", () => {
-  test.each(["approve", "reject", "cancel"] as const)(
-    "accepts the %s decision",
-    (decision) => {
-      const parsed = controlEventSchema.parse({ kind: "control", decision })
-      expect(parsed).toEqual({ kind: "control", decision })
-    },
-  )
-
-  test("rejects an unknown decision (fails loud, not silently relayed)", () => {
-    expect(() =>
-      controlEventSchema.parse({ kind: "control", decision: "nuke" }),
-    ).toThrow()
-  })
-
-  test("rejects extra keys on the control envelope (strict boundary)", () => {
-    expect(() =>
-      controlEventSchema.parse({ kind: "control", decision: "approve", extra: 1 }),
-    ).toThrow()
   })
 })
