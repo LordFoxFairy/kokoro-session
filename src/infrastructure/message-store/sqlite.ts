@@ -1,20 +1,20 @@
 import { Database } from "bun:sqlite"
 
-import type { MessageStore } from "../../application/event-stream"
-import { parseSessionEvent, type SessionEvent } from "../../domain/session-event"
+import type { MessageStore, StoredEvent } from "../../application/event-stream"
+import { parseSessionEvent } from "../../domain/session-event"
 
 // bun:sqlite 的 run() 执行单条语句，故建表/建索引分开（多语句一次 run 会失败）。
+// PK (session_id, event_id)：event_id 幂等去重（relay 重启以新 cursor 重投同一事件，INSERT OR IGNORE 保首条）。
+// 到达序由隐式 rowid 兜（自增、单调），故无需显式 seq 列；read 一律 ORDER BY rowid。
 const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS session_message (
   session_id TEXT NOT NULL,
-  seq        INTEGER NOT NULL,
+  cursor     TEXT NOT NULL,
   event_id   TEXT NOT NULL,
   event_json TEXT NOT NULL,
   PRIMARY KEY (session_id, event_id)
 )`
-// 索引 (session_id, seq) 支撑「按会话取、按 seq 序」；同 seq 的稳定序由 read 的 ORDER BY ... rowid
-// 兜（rowid 是隐式行键、不可入索引表达式，但 ORDER BY 可用）。
 const CREATE_INDEX =
-  "CREATE INDEX IF NOT EXISTS idx_session_message_seq ON session_message(session_id, seq)"
+  "CREATE INDEX IF NOT EXISTS idx_session_message_cursor ON session_message(session_id, cursor)"
 
 // bun 内置 sqlite（零依赖）：本地落盘的默认持久消息库。
 export class SqliteMessageStore implements MessageStore {
@@ -26,13 +26,15 @@ export class SqliteMessageStore implements MessageStore {
     db.run(CREATE_INDEX)
   }
 
-  append(sessionId: string, events: SessionEvent[]): Promise<void> {
+  append(sessionId: string, events: StoredEvent[]): Promise<void> {
     const insert = this.db.query(
-      "INSERT OR IGNORE INTO session_message(session_id, seq, event_id, event_json) VALUES(?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO session_message(session_id, cursor, event_id, event_json) VALUES(?, ?, ?, ?)",
     )
     // 单事务批量插：少 fsync；INSERT OR IGNORE 按 (session_id, event_id) 幂等去重（重连/重放安全）。
-    const tx = this.db.transaction((evs: SessionEvent[]) => {
-      for (const e of evs) insert.run(sessionId, e.seq, e.event_id, JSON.stringify(e))
+    const tx = this.db.transaction((evs: StoredEvent[]) => {
+      for (const s of evs) {
+        insert.run(sessionId, s.cursor, s.event.event_id, JSON.stringify(s.event))
+      }
     })
     tx(events)
     return Promise.resolve()
@@ -40,16 +42,27 @@ export class SqliteMessageStore implements MessageStore {
 
   read(
     sessionId: string,
-    opts?: { afterSeq?: number; limit?: number },
-  ): Promise<SessionEvent[]> {
-    const after = opts?.afterSeq ?? -1
+    opts?: { afterCursor?: string; limit?: number },
+  ): Promise<StoredEvent[]> {
     const limit = opts?.limit ?? -1 // sqlite LIMIT -1 = 无上限
+    // afterCursor → 子查询取其 rowid 续读；未命中（裁剪/升级残留）则子查询为 NULL，
+    // COALESCE 退回 -1 → rowid > -1 取全量，绝不空流（web event_id 去重兜底）。
+    const after = opts?.afterCursor
     const rows = this.db
       .query(
-        "SELECT event_json FROM session_message WHERE session_id = ? AND seq > ? ORDER BY seq, rowid LIMIT ?",
+        `SELECT cursor, event_json FROM session_message
+         WHERE session_id = ?1
+           AND rowid > COALESCE(
+             (SELECT rowid FROM session_message WHERE session_id = ?1 AND cursor = ?2), -1)
+         ORDER BY rowid LIMIT ?3`,
       )
-      .all(sessionId, after, limit) as { event_json: string }[]
+      .all(sessionId, after ?? "", limit) as { cursor: string; event_json: string }[]
     // 出库即过 Zod：DB 里若有被外部污染的脏行，宁可在此抛错也不把脏数据回放给 web。
-    return Promise.resolve(rows.map((r) => parseSessionEvent(JSON.parse(r.event_json) as unknown)))
+    return Promise.resolve(
+      rows.map((r) => ({
+        cursor: r.cursor,
+        event: parseSessionEvent(JSON.parse(r.event_json) as unknown),
+      })),
+    )
   }
 }

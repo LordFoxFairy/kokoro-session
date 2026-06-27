@@ -3,7 +3,7 @@ import { rmSync } from "node:fs"
 import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
 
-import type { MessageStore } from "../src/application/event-stream"
+import type { MessageStore, StoredEvent } from "../src/application/event-stream"
 import type { SessionEvent } from "../src/domain/session-event"
 import {
   makeMessageStore,
@@ -11,38 +11,53 @@ import {
   SqliteMessageStore,
 } from "../src/infrastructure/message-store"
 
-function evt(sessionId: string, seq: number, eventId: string): SessionEvent {
-  // 最简合法 SessionEvent（run.created）；read 的出库 Zod 必须能过。
-  return {
+function stored(sessionId: string, cursor: string, eventId: string): StoredEvent {
+  // 最简合法 SessionEvent（run.created）+ 其 transport cursor（= SSE id 轴）。
+  const event: SessionEvent = {
     event: "run.created",
     event_id: eventId,
-    seq,
+    seq: 0,
     session_id: sessionId,
     conversation_id: sessionId,
     run_id: "run_1",
     timestamp: "2026-05-30T00:00:00.000Z",
     payload: { run_id: "run_1" },
   }
+  return { cursor, event }
 }
 
-// 行为矩阵：append/read 往返按 seq 有序、event_id 幂等去重、afterSeq 增量、limit、会话隔离。
+// 行为矩阵：按到达序回放、event_id 幂等去重（重投保首条 cursor）、afterCursor 增量、limit、会话隔离。
 async function assertBehaviour(store: MessageStore): Promise<void> {
   const sid = "ses_a"
-  await store.append(sid, [evt(sid, 0, "e0"), evt(sid, 1, "e1"), evt(sid, 2, "e2")])
-  expect((await store.read(sid)).map((e) => e.event_id)).toEqual(["e0", "e1", "e2"])
+  await store.append(sid, [
+    stored(sid, "c1", "e0"),
+    stored(sid, "c2", "e1"),
+    stored(sid, "c3", "e2"),
+  ])
+  expect((await store.read(sid)).map((s) => s.cursor)).toEqual(["c1", "c2", "c3"])
+  expect((await store.read(sid)).map((s) => s.event.event_id)).toEqual(["e0", "e1", "e2"])
 
-  // 重复 event_id 幂等：再 append 同一条只存一次。
-  await store.append(sid, [evt(sid, 1, "e1")])
-  expect((await store.read(sid)).length).toBe(3)
+  // event_id 幂等：relay 重启会以新 cursor 重投同一 event_id；只存首次，cursor 保稳定（c2 不被 c9 覆盖）。
+  await store.append(sid, [stored(sid, "c9", "e1")])
+  const all = await store.read(sid)
+  expect(all.length).toBe(3)
+  expect(all.map((s) => s.cursor)).toEqual(["c1", "c2", "c3"])
 
-  // afterSeq 增量回放（SSE 从历史接实时的桥）。
-  expect((await store.read(sid, { afterSeq: 0 })).map((e) => e.seq)).toEqual([1, 2])
+  // afterCursor 增量回放（SSE 从 DB 历史接 redis 实时的桥）。
+  expect((await store.read(sid, { afterCursor: "c1" })).map((s) => s.cursor)).toEqual(["c2", "c3"])
 
   // limit 分页。
-  expect((await store.read(sid, { limit: 2 })).map((e) => e.event_id)).toEqual(["e0", "e1"])
+  expect((await store.read(sid, { limit: 2 })).map((s) => s.cursor)).toEqual(["c1", "c2"])
 
   // 会话隔离：read 按 sessionId 只取自己的；未知会话 → []。
   expect(await store.read("ses_other")).toEqual([])
+
+  // 未知 afterCursor（已被裁剪/升级残留）→ 退回全量，web 端 event_id 去重兜底，绝不空流。
+  expect((await store.read(sid, { afterCursor: "nope" })).map((s) => s.cursor)).toEqual([
+    "c1",
+    "c2",
+    "c3",
+  ])
 }
 
 describe("MessageStore 行为矩阵", () => {
@@ -63,10 +78,10 @@ describe("SqliteMessageStore 落盘持久性", () => {
 
   test("跨句柄/重启读同一文件（持久历史不丢）", async () => {
     const writer = new SqliteMessageStore(new Database(path))
-    await writer.append("s", [evt("s", 0, "x"), evt("s", 1, "y")])
+    await writer.append("s", [stored("s", "c1", "x"), stored("s", "c2", "y")])
     // 全新句柄（模拟重启 / 另一进程）读同一文件。
     const reader = new SqliteMessageStore(new Database(path))
-    expect((await reader.read("s")).map((e) => e.event_id)).toEqual(["x", "y"])
+    expect((await reader.read("s")).map((s) => s.cursor)).toEqual(["c1", "c2"])
   })
 })
 

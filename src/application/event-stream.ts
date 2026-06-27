@@ -21,10 +21,16 @@ export interface ReplayStore {
   append(sessionId: string, events: SessionEvent[]): Promise<void> | void
 }
 
-// 会话消息的持久存储（sqlite 默认本地落盘 / mongo 跨 pod / memory 易失）：把长期历史从 redis 卸到
-// DB，redis 退为实时总线。append 落库（按 event_id 幂等去重）；read 按 (seq, 到达序) 有序回放，
-// afterSeq 支持增量/分页。read 的「哪份数据」由 sessionId 选，与 redis 的 stream key 同一身份维度。
+// 一条持久历史条目：领域事件 + 它的 transport cursor（= SSE id 轴，会话级单调、续点锚）。
+export type StoredEvent = {
+  cursor: string
+  event: SessionEvent
+}
+
+// 会话消息的持久真源（sqlite 默认本地落盘 / mongo 跨 pod / memory 易失）：长期历史从 redis 卸到 DB，
+// redis 退为有界实时总线。append 按 event_id 幂等去重（relay 重启会以新 cursor 重投同一事件，保首条 cursor
+// 稳定）；read 按到达序回放，afterCursor 增量续点（未知 cursor 退回全量，web event_id 去重兜底，绝不空流）。
 export interface MessageStore {
-  append(sessionId: string, events: SessionEvent[]): Promise<void>
-  read(sessionId: string, opts?: { afterSeq?: number; limit?: number }): Promise<SessionEvent[]>
+  append(sessionId: string, events: StoredEvent[]): Promise<void>
+  read(sessionId: string, opts?: { afterCursor?: string; limit?: number }): Promise<StoredEvent[]>
 }
