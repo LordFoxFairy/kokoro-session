@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "ioredis": "^5.4.1",
+    "mongodb": "6.3.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
