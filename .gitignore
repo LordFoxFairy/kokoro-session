@@ -9,3 +9,7 @@ dist/
 coverage/
 docs/
 tmp/
+# 本地 sqlite 历史库（KOKORO_MESSAGE_STORE_DB，默认 kokoro-session-messages.db）+ WAL 边车
+*.db
+*.db-wal
+*.db-shm
