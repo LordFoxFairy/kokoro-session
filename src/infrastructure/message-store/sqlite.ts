@@ -45,18 +45,27 @@ export class SqliteMessageStore implements MessageStore {
     opts?: { afterCursor?: string; limit?: number },
   ): Promise<StoredEvent[]> {
     const limit = opts?.limit ?? -1 // sqlite LIMIT -1 = 无上限
-    // afterCursor → 子查询取其 rowid 续读；未命中（裁剪/升级残留）则子查询为 NULL，
-    // COALESCE 退回 -1 → rowid > -1 取全量，绝不空流（web event_id 去重兜底）。
-    const after = opts?.afterCursor
-    const rows = this.db
-      .query(
-        `SELECT cursor, event_json FROM session_message
-         WHERE session_id = ?1
-           AND rowid > COALESCE(
-             (SELECT rowid FROM session_message WHERE session_id = ?1 AND cursor = ?2), -1)
-         ORDER BY rowid LIMIT ?3`,
-      )
-      .all(sessionId, after ?? "", limit) as { cursor: string; event_json: string }[]
+    // afterCursor 命中 → 取其 rowid 续读；未传 / 未命中（裁剪/升级残留）→ 全量（不空流，web event_id 去重兜底）。
+    // 与 MongoMessageStore.read 同形（anchor 有无两分支），不用 COALESCE/空串哨兵那类绕的写法。
+    const anchor =
+      opts?.afterCursor === undefined
+        ? null
+        : (this.db
+            .query("SELECT rowid FROM session_message WHERE session_id = ? AND cursor = ?")
+            .get(sessionId, opts.afterCursor) as { rowid: number } | null)
+    const rows = (
+      anchor
+        ? this.db
+            .query(
+              "SELECT cursor, event_json FROM session_message WHERE session_id = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3",
+            )
+            .all(sessionId, anchor.rowid, limit)
+        : this.db
+            .query(
+              "SELECT cursor, event_json FROM session_message WHERE session_id = ?1 ORDER BY rowid LIMIT ?2",
+            )
+            .all(sessionId, limit)
+    ) as { cursor: string; event_json: string }[]
     // 出库即过 Zod：DB 里若有被外部污染的脏行，宁可在此抛错也不把脏数据回放给 web。
     return Promise.resolve(
       rows.map((r) => ({
