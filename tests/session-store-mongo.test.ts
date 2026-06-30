@@ -50,6 +50,13 @@ function makeStore(mongo: MongoClient, dbName: string): MongoSessionStore {
   })
 }
 
+function eventMeta(sessionId = "ses_1") {
+  return {
+    conversationId: sessionId,
+    timestamp: "2026-06-30T00:00:00.000Z",
+  }
+}
+
 describe("MongoSessionStore", () => {
   itOrSkip("persists sessions/messages/runs/events across clients", async () => {
     const dbName = makeDbName("persist")
@@ -72,6 +79,7 @@ describe("MongoSessionStore", () => {
       siteId: "site_1",
       sessionId: "ses_1",
       eventId: "evt_1",
+      ...eventMeta(),
       runId: started.runId,
       type: "message.delta",
       payload: { delta: "hello" },
@@ -154,6 +162,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_1",
           sessionId: "ses_1",
           eventId: "evt_retry",
+          ...eventMeta(),
           runId: started.runId,
           type: "message.delta",
           payload: { delta: "one" },
@@ -164,6 +173,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_1",
           sessionId: "ses_1",
           eventId: "evt_retry",
+          ...eventMeta(),
           runId: started.runId,
           type: "message.delta",
           payload: { delta: "two" },
@@ -194,6 +204,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_1",
           sessionId: "ses_1",
           eventId: "evt_done",
+          ...eventMeta(),
           runId: started.runId,
           type: "run.completed",
           status: "completed",
@@ -244,6 +255,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_1",
           sessionId: "same_session",
           eventId: "evt_shared",
+          ...eventMeta("same_session"),
           runId: siteOne.runId,
           type: "message.delta",
         }),
@@ -253,6 +265,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_2",
           sessionId: "same_session",
           eventId: "evt_shared",
+          ...eventMeta("same_session"),
           runId: siteTwo.runId,
           type: "message.delta",
         }),
@@ -262,6 +275,7 @@ describe("MongoSessionStore", () => {
           siteId: "site_1",
           sessionId: "same_session",
           eventId: "evt_wrong_terminal",
+          ...eventMeta("same_session"),
           runId: siteTwo.runId,
           type: "run.completed",
           status: "completed",

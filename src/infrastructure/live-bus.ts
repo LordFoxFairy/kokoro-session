@@ -1,5 +1,5 @@
-// 会话实时总线：relay 把归一化信封发布到此流供 SSE 实时 tail。与旧 ReplayStore 的本质区别——
-// 它不再是持久真源（那是 MessageStore），只是瞬时 fanout，故按 MAXLEN 有界，卸下 redis RAM 负担。
+// 会话实时总线：relay 把归一化信封发布到此流供 SSE 实时 tail。
+// 它不再是持久真源（那是 SessionStore），只是瞬时 fanout，故按 MAXLEN 有界，卸下 redis RAM 负担。
 // 流名一条 per session；SSE 正确性由「DB 历史 + live tail」桥兜底，不依赖本流的保留时长。
 export function liveStream(sessionId: string): string {
   return `kokoro:session:${sessionId}:live`

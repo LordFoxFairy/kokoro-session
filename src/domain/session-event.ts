@@ -8,8 +8,6 @@ export type SessionEventName = z.infer<typeof sessionEventSchema>["event"]
 export type SessionEvent = {
   event: SessionEventName
   event_id: string
-  // seq：session 透传 agent 的一等发射序号，是真实发射顺序的唯一排序源。
-  seq: number
   session_id: string
   conversation_id: string
   run_id: string
@@ -19,7 +17,6 @@ export type SessionEvent = {
 
 const envelopeFields = {
   event_id: z.string().min(1),
-  seq: z.number().int().nonnegative(),
   session_id: z.string().min(1),
   conversation_id: z.string().min(1),
   run_id: z.string().min(1),

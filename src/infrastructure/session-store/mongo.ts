@@ -1,4 +1,4 @@
-import { MongoServerError, type ClientSession, type Collection, type MongoClient } from "mongodb"
+import { MongoServerError, type ClientSession, type Collection, type Filter, type MongoClient } from "mongodb"
 
 import {
   SessionRunActiveError,
@@ -115,8 +115,10 @@ function cloneEvent(event: SessionEventLogEntry): SessionEventLogEntry {
     siteId: event.siteId,
     eventId: event.eventId,
     sessionId: event.sessionId,
+    conversationId: event.conversationId,
     runId: event.runId,
     type: event.type,
+    timestamp: event.timestamp,
     ...(event.status !== undefined ? { status: event.status } : {}),
     payload: { ...event.payload },
     createdAt: cloneDate(event.createdAt),
@@ -249,8 +251,21 @@ export class MongoSessionStore implements SessionStore {
     return docs.map(cloneRun)
   }
 
-  async listEvents(siteId: string, sessionId: string): Promise<SessionEventLogEntry[]> {
-    const docs = await this.events.find({ siteId, sessionId }).sort({ _id: 1 }).toArray()
+  async listEvents(
+    siteId: string,
+    sessionId: string,
+    opts: { afterEventId?: string; limit?: number } = {},
+  ): Promise<SessionEventLogEntry[]> {
+    const filter: Filter<EventDoc> = { siteId, sessionId }
+    if (opts.afterEventId !== undefined) {
+      const anchor = await this.events.findOne({ siteId, sessionId, eventId: opts.afterEventId })
+      if (anchor !== null) {
+        filter._id = { $gt: anchor._id }
+      }
+    }
+    const cursor = this.events.find(filter).sort({ _id: 1 })
+    if (opts.limit !== undefined) cursor.limit(opts.limit)
+    const docs = await cursor.toArray()
     return docs.map(cloneEvent)
   }
 
@@ -446,8 +461,10 @@ export class MongoSessionStore implements SessionStore {
           siteId: input.siteId,
           eventId: input.eventId,
           sessionId: input.sessionId,
+          conversationId: input.conversationId,
           runId: input.runId,
           type: input.type,
+          timestamp: input.timestamp,
           ...(input.status !== undefined ? { status: input.status } : {}),
           payload: input.payload ?? {},
           createdAt: at,

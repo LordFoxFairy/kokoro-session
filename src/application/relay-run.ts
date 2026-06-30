@@ -1,19 +1,21 @@
-import type { MessageStore, StoredEvent, StreamProtocol } from "./event-stream"
+import type { StreamProtocol } from "./event-stream"
 import type { Normalizer } from "./normalize"
+import type { SessionStore } from "./session-store"
+import type { AgentRunStatus } from "../domain/run"
+import type { SessionEvent } from "../domain/session-event"
 import { LIVE_STREAM_MAXLEN, liveStream } from "../infrastructure/live-bus"
 import { runEventsStream } from "./stream-names"
 
 export type RelayRunInput = {
   bus: StreamProtocol
-  messageStore: MessageStore
+  sessionStore: SessionStore
   normalizer: Normalizer
+  siteId: string
   sessionId: string
   runId: string
 }
 
-// 消费某 run 的事件流 → 归一化 → 发布 live（供 SSE 实时）+ 持久 DB（长期真源）。先 publish 拿 cursor、
-// 再以该 cursor 落 DB：DB 只存在过 live 的 cursor，两者共用唯一 id 轴。遇终态（run.completed/failed）
-// 收束，避免连接挂等。cursor 是定序唯一源兼 SSE 续点；断连/空流不崩。
+// 消费某 run 的事件流 → 归一化 → 持久 SessionStore（长期真源）→ 发布 live（供 SSE 实时）。
 export async function relayRun(input: RelayRunInput): Promise<void> {
   const stream = runEventsStream(input.runId)
   const live = liveStream(input.sessionId)
@@ -27,12 +29,22 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
       continue
     }
     if (envelopes.length > 0) {
-      const stored: StoredEvent[] = []
       for (const event of envelopes) {
-        const cursor = await input.bus.publish(live, event, { maxlen: LIVE_STREAM_MAXLEN })
-        stored.push({ cursor, event })
+        const append = await input.sessionStore.appendEvent({
+          siteId: input.siteId,
+          sessionId: event.session_id,
+          eventId: event.event_id,
+          conversationId: event.conversation_id,
+          runId: event.run_id,
+          type: event.event,
+          timestamp: event.timestamp,
+          payload: event.payload,
+          ...(terminalStatus(event) !== undefined ? { status: terminalStatus(event) } : {}),
+        })
+        if (!append.stored) continue
+
+        await input.bus.publish(live, event, { maxlen: LIVE_STREAM_MAXLEN })
       }
-      await input.messageStore.append(input.sessionId, stored)
     }
     if (envelopes.some((e) => e.event === "run.completed" || e.event === "run.failed")) {
       // 终态即收束 relay：不再读取该 run 的事件流，连接释放。resume/cancel 走共享请求流、
@@ -40,4 +52,12 @@ export async function relayRun(input: RelayRunInput): Promise<void> {
       return
     }
   }
+}
+
+function terminalStatus(event: SessionEvent): AgentRunStatus | undefined {
+  if (event.event === "run.failed") return "failed"
+  if (event.event !== "run.completed") return undefined
+  const status = event.payload.status
+  if (status === "completed" || status === "cancelled" || status === "timeout") return status
+  return undefined
 }

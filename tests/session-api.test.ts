@@ -4,7 +4,6 @@ import { afterEach, describe, expect, test } from "bun:test"
 
 import { REQUESTS_STREAM } from "../src/application/stream-names"
 import { runRequestSchema } from "../src/domain/run-request"
-import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemorySessionStore } from "../src/application/session-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 import { buildServer } from "../src/interfaces/http"
@@ -13,13 +12,12 @@ function makeDeps() {
   let messageNumber = 0
   let runNumber = 0
   const bus = new MemoryStream()
-  const messageStore = new MemoryMessageStore()
   const sessionStore = new MemorySessionStore({
     now: () => new Date("2026-06-30T00:00:00.000Z"),
     newMessageId: () => `msg_${++messageNumber}`,
     newRunId: () => `run_${++runNumber}`,
   })
-  return { bus, messageStore, sessionStore }
+  return { bus, sessionStore }
 }
 
 let server: ReturnType<typeof buildServer> | undefined
@@ -128,8 +126,10 @@ describe("message-first session API", () => {
       siteId: "site_1",
       sessionId: "ses_1",
       eventId: "evt_1",
+      conversationId: "ses_1",
       runId: "run_1",
       type: "message.delta",
+      timestamp: "2026-06-30T00:00:00.000Z",
       payload: { delta: "hi" },
     })
 

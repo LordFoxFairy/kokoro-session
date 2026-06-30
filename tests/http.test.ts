@@ -8,32 +8,41 @@ import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-name
 import type { SessionEvent } from "../src/domain/session-event"
 import { MemorySessionStore } from "../src/application/session-store"
 import { LIVE_STREAM_MAXLEN, liveStream } from "../src/infrastructure/live-bus"
-import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 import { buildServer } from "../src/interfaces/http"
 
+const SITE_ID = "site_1"
+
 function makeDeps() {
   const bus = new MemoryStream()
-  const messageStore = new MemoryMessageStore()
   const sessionStore = new MemorySessionStore()
-  return { bus, messageStore, sessionStore }
+  return { bus, sessionStore }
 }
 
-// 模拟 relay：先发布 live（拿 cursor）再持久 DB，返回各事件的 transport cursor（= SSE id 轴）。
+// 模拟 relay 的 DB-first 结果：SessionStore 是历史真源，Redis live 只负责实时 fanout。
 async function seed(
   deps: ReturnType<typeof makeDeps>,
   sessionId: string,
   events: SessionEvent[],
 ): Promise<string[]> {
-  const cursors: string[] = []
+  const eventIds: string[] = []
   for (const event of events) {
-    const cursor = await deps.bus.publish(liveStream(sessionId), event, {
+    await deps.sessionStore.appendEvent({
+      siteId: SITE_ID,
+      sessionId,
+      eventId: event.event_id,
+      conversationId: event.conversation_id,
+      runId: event.run_id,
+      type: event.event,
+      timestamp: event.timestamp,
+      payload: event.payload,
+    })
+    await deps.bus.publish(liveStream(sessionId), event, {
       maxlen: LIVE_STREAM_MAXLEN,
     })
-    await deps.messageStore.append(sessionId, [{ cursor, event }])
-    cursors.push(cursor)
+    eventIds.push(event.event_id)
   }
-  return cursors
+  return eventIds
 }
 
 let server: ReturnType<typeof buildServer>
@@ -74,7 +83,14 @@ describe("GET /sessions/:id/stream", () => {
     await listen(deps)
 
     const sessionId = "ses_sse"
-    const runId = "run_sse"
+    const started = await deps.sessionStore.startRun({
+      siteId: SITE_ID,
+      sessionId,
+      ownerUserId: "user_1",
+      content: "hello",
+      idempotencyKey: "idem_sse",
+    })
+    const runId = started.runId
 
     // 模拟 agent worker：把 canonical wire 事件回写到 run 事件流。
     const env = { request_id: runId, timestamp: 1700000000 }
@@ -94,10 +110,17 @@ describe("GET /sessions/:id/stream", () => {
       { sessionId, conversationId: sessionId, runId },
       { now: () => new Date("2026-05-30T00:00:00.000Z") },
     )
-    await relayRun({ bus: deps.bus, messageStore: deps.messageStore, normalizer, sessionId, runId })
+    await relayRun({
+      bus: deps.bus,
+      sessionStore: deps.sessionStore,
+      normalizer,
+      siteId: SITE_ID,
+      sessionId,
+      runId,
+    })
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
-      headers: { accept: "text/event-stream" },
+      headers: { accept: "text/event-stream", "x-kokoro-site-id": SITE_ID },
       signal: AbortSignal.timeout(2000),
     })
     expect(res.headers.get("content-type")).toContain("text/event-stream")
@@ -108,8 +131,8 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("event: message.delta")
     expect(text).toContain("event: run.completed")
     expect(text).toContain('"title":"ses_sse"')
-    // SSE 三行结构：id / event / data。id 用 replay 流 transport cursor（数字），非域 cursor。
-    expect(text).toMatch(/id: \d+\nevent: session\.created\ndata: \{/)
+    // SSE 三行结构：id / event / data。id 使用 opaque event_id，前端用 Last-Event-ID 原样续传。
+    expect(text).toMatch(/id: evt_[0-9a-f]{32}\nevent: session\.created\ndata: \{/)
   })
 
   // 回归：非空快照后必须继续续订实时事件。旧实现把领域 envelope.cursor 当作续订游标，
@@ -132,7 +155,6 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
-        seq: 0,
         ...base,
         payload: {
           session_id: sessionId,
@@ -144,7 +166,7 @@ describe("GET /sessions/:id/stream", () => {
     ])
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
-      headers: { accept: "text/event-stream" },
+      headers: { accept: "text/event-stream", "x-kokoro-site-id": SITE_ID },
       signal: AbortSignal.timeout(3000),
     })
 
@@ -153,14 +175,12 @@ describe("GET /sessions/:id/stream", () => {
     await deps.bus.publish(liveStream(sessionId), {
       event: "message.delta",
       event_id: "evt_2",
-      seq: 1,
       ...base,
       payload: { segment_id: `${runId}:m1`, delta: "你好", role: "assistant" },
     })
     await deps.bus.publish(liveStream(sessionId), {
       event: "run.completed",
       event_id: "evt_3",
-      seq: 2,
       ...base,
       payload: { run_id: runId, status: "completed" },
     })
@@ -188,7 +208,6 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
-        seq: 0,
         ...base,
         payload: {
           session_id: sessionId,
@@ -198,20 +217,19 @@ describe("GET /sessions/:id/stream", () => {
         },
       },
     ])
-    // 损坏的 Redis 条目经 decodeFields 兜底后即为 null：直接投喂 null 到 live 总线复现该形态，
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+      headers: { accept: "text/event-stream", "x-kokoro-site-id": SITE_ID },
+      signal: AbortSignal.timeout(2000),
+    })
+    // 损坏的 Redis 条目经 decodeFields 兜底后即为 null：连接建立后投喂 null 到 live 总线复现该形态，
     // 紧随其后的合法终态须照常 tail 交付——单条脏数据不得炸断 SSE 实时流。
+    await new Promise((resolve) => setTimeout(resolve, 50))
     await deps.bus.publish(liveStream(sessionId), null)
     await deps.bus.publish(liveStream(sessionId), {
       event: "run.completed",
       event_id: "evt_2",
-      seq: 1,
       ...base,
       payload: { run_id: runId, status: "completed" },
-    })
-
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
-      headers: { accept: "text/event-stream" },
-      signal: AbortSignal.timeout(2000),
     })
     const text = await readSomeSse(res)
 
@@ -220,7 +238,7 @@ describe("GET /sessions/:id/stream", () => {
     expect(text).toContain("event: run.completed")
   })
 
-  test("SSE id line carries the replay transport cursor, not the domain envelope cursor", async () => {
+  test("SSE id line carries the opaque event_id", async () => {
     const deps = makeDeps()
     await listen(deps)
 
@@ -232,11 +250,10 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    const cursors = await seed(deps, sessionId, [
+    const eventIds = await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
-        seq: 0,
         ...base,
         payload: {
           session_id: sessionId,
@@ -248,24 +265,22 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_2",
-        seq: 1,
         ...base,
         payload: { run_id: runId, status: "completed" },
       },
     ])
 
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
-      headers: { accept: "text/event-stream" },
+      headers: { accept: "text/event-stream", "x-kokoro-site-id": SITE_ID },
       signal: AbortSignal.timeout(2000),
     })
     const text = await readSomeSse(res)
 
-    // SSE id = transport cursor（全局单调、可作续点），而非 per-run 域 cursor。
-    expect(text).toContain(`id: ${cursors[0]}`)
+    expect(text).toContain(`id: ${eventIds[0]}`)
     expect(text).not.toContain(`id: ${runId}:0001`)
   })
 
-  test("resumes from a transport-cursor Last-Event-ID, skipping already-delivered events", async () => {
+  test("resumes from Last-Event-ID event_id, skipping already-delivered events", async () => {
     const deps = makeDeps()
     await listen(deps)
 
@@ -277,11 +292,10 @@ describe("GET /sessions/:id/stream", () => {
       run_id: runId,
       timestamp: "2026-05-30T00:00:00.000Z",
     }
-    const cursors = await seed(deps, sessionId, [
+    const eventIds = await seed(deps, sessionId, [
       {
         event: "session.created",
         event_id: "evt_1",
-        seq: 0,
         ...base,
         payload: {
           session_id: sessionId,
@@ -293,14 +307,12 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "message.delta",
         event_id: "evt_2",
-        seq: 1,
         ...base,
         payload: { segment_id: `${runId}:m1`, delta: "hi", role: "assistant" },
       },
       {
         event: "run.completed",
         event_id: "evt_3",
-        seq: 2,
         ...base,
         payload: { run_id: runId, status: "completed" },
       },
@@ -309,24 +321,25 @@ describe("GET /sessions/:id/stream", () => {
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: {
         accept: "text/event-stream",
-        "last-event-id": cursors[0] as string,
+        "x-kokoro-site-id": SITE_ID,
+        "last-event-id": eventIds[0] as string,
       },
       signal: AbortSignal.timeout(2000),
     })
     const text = await readSomeSse(res)
 
-    // 续点之后增量续传：cursor[0] 的 session.created 已交付，跳过；其后的续传。
+    // 续点之后增量续传：evt_1 的 session.created 已交付，跳过；其后的续传。
     expect(text).not.toContain("event: session.created")
     expect(text).toContain("event: message.delta")
     expect(text).toContain("event: run.completed")
   })
 
-  test("falls back to full replay when Last-Event-ID is not a transport cursor (upgrade transition)", async () => {
+  test("falls back to full replay when Last-Event-ID is unknown", async () => {
     const deps = makeDeps()
     await listen(deps)
 
-    const sessionId = "ses_legacy"
-    const runId = "run_legacy"
+    const sessionId = "ses_unknown_resume"
+    const runId = "run_unknown_resume"
     const base = {
       session_id: sessionId,
       conversation_id: sessionId,
@@ -337,7 +350,6 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "session.created",
         event_id: "evt_1",
-        seq: 0,
         ...base,
         payload: {
           session_id: sessionId,
@@ -349,18 +361,16 @@ describe("GET /sessions/:id/stream", () => {
       {
         event: "run.completed",
         event_id: "evt_2",
-        seq: 1,
         ...base,
         payload: { run_id: runId, status: "completed" },
       },
     ])
 
-    // 升级过渡：浏览器仍持旧的域 cursor 作 Last-Event-ID。它不是合法 transport 续点，
-    // 必须被忽略、退回全量重放（reducer 端 eventId 去重兜底），绝不能静默空流。
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
       headers: {
         accept: "text/event-stream",
-        "last-event-id": `${runId}:0001`,
+        "x-kokoro-site-id": SITE_ID,
+        "last-event-id": "evt_missing",
       },
       signal: AbortSignal.timeout(2000),
     })

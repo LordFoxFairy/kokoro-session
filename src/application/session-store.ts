@@ -2,6 +2,7 @@ import type { ChatMessage } from "../domain/message"
 import type { AgentRun, AgentRunStatus } from "../domain/run"
 import type { ChatSession } from "../domain/session"
 import type { SessionEventLogEntry } from "../domain/session-event-log"
+import type { SessionEventName } from "../domain/session-event"
 
 type Clock = () => Date
 type IdFactory = () => string
@@ -24,8 +25,10 @@ export type AppendSessionEventInput = {
   siteId: string
   sessionId: string
   eventId: string
+  conversationId: string
   runId: string
-  type: string
+  type: SessionEventName
+  timestamp: string
   status?: AgentRunStatus
   payload?: Record<string, unknown>
 }
@@ -40,7 +43,11 @@ export type SessionStore = {
   getSession(siteId: string, sessionId: string): Promise<ChatSession | null>
   listMessages(siteId: string, sessionId: string): Promise<ChatMessage[]>
   listRuns(siteId: string, sessionId: string): Promise<AgentRun[]>
-  listEvents(siteId: string, sessionId: string): Promise<SessionEventLogEntry[]>
+  listEvents(
+    siteId: string,
+    sessionId: string,
+    opts?: { afterEventId?: string; limit?: number },
+  ): Promise<SessionEventLogEntry[]>
 }
 
 export class SessionRunActiveError extends Error {
@@ -238,8 +245,10 @@ export class MemorySessionStore implements SessionStore {
       siteId: input.siteId,
       eventId: input.eventId,
       sessionId: input.sessionId,
+      conversationId: input.conversationId,
       runId: input.runId,
       type: input.type,
+      timestamp: input.timestamp,
       ...(input.status !== undefined ? { status: input.status } : {}),
       payload: input.payload ?? {},
       createdAt: at,
@@ -282,8 +291,18 @@ export class MemorySessionStore implements SessionStore {
     return Promise.resolve((this.runs.get(this.sessionKey(siteId, sessionId)) ?? []).map(cloneRun))
   }
 
-  listEvents(siteId: string, sessionId: string): Promise<SessionEventLogEntry[]> {
-    return Promise.resolve((this.events.get(this.sessionKey(siteId, sessionId)) ?? []).map(cloneEvent))
+  listEvents(
+    siteId: string,
+    sessionId: string,
+    opts: { afterEventId?: string; limit?: number } = {},
+  ): Promise<SessionEventLogEntry[]> {
+    const all = this.events.get(this.sessionKey(siteId, sessionId)) ?? []
+    const start =
+      opts.afterEventId === undefined
+        ? 0
+        : Math.max(0, all.findIndex((event) => event.eventId === opts.afterEventId) + 1)
+    const end = opts.limit === undefined ? undefined : start + opts.limit
+    return Promise.resolve(all.slice(start, end).map(cloneEvent))
   }
 
   private sessionKey(siteId: string, sessionId: string): string {

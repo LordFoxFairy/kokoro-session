@@ -58,8 +58,8 @@ export class MemoryStream implements StreamProtocol {
     while (true) {
       const items = this.streams.get(stream) ?? []
       if (!initialized) {
-        // 续点：定位首个 cursor > fromCursor 的下标（升序二分），之后纯按偏移推进。
-        lastIndex = indexAfter(items, fromCursor!)
+        // "$" 表示从当前尾部开始订阅，只收未来事件；SSE 在 DB-first replay 前预启动该订阅来封住竞态。
+        lastIndex = fromCursor === "$" ? items.length : indexAfter(items, fromCursor!)
         initialized = true
       } else if (lastIndex > items.length) {
         // delete 后换了更短的新数组：偏移失效，从首读起（counter 不复用，新游标必然更大）。
@@ -124,7 +124,7 @@ export class RedisStream implements StreamProtocol {
   async publish(stream: string, event: unknown, opts?: { maxlen?: number }): Promise<string> {
     await this.ensureConnected(this.redis)
     const payload = JSON.stringify(event)
-    // MAXLEN ~ N：近似裁剪（不强制精确，省 CPU）；老历史由 MessageStore 持久，redis 退为有界 live 窗口。
+    // MAXLEN ~ N：近似裁剪（不强制精确，省 CPU）；老历史由 SessionStore 持久，redis 退为有界 live 窗口。
     const id =
       opts?.maxlen === undefined
         ? await this.redis.xadd(stream, "*", REDIS_FIELD, payload)
@@ -151,8 +151,7 @@ export class RedisStream implements StreamProtocol {
     conn.on("error", () => {})
     try {
       await this.ensureConnected(conn)
-      // 退化到 "0-0" 从流首读起（xread 不接受 "" 作 id）；
-      // 续点假设条目未被裁剪，将来加 XTRIM 须检测裁剪并回退全量。
+      // 退化到 "0-0" 从流首读起；"$" 表示只收未来事件，用于 SSE live tail。
       let lastId = fromCursor || "0-0"
       while (true) {
         const result = await conn.xread("BLOCK", this.blockMs, "STREAMS", stream, lastId)

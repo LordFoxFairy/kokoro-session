@@ -137,8 +137,10 @@ describe("SessionStore", () => {
       siteId: "site_1",
       sessionId: "ses_1",
       eventId: "evt_done",
+      conversationId: "ses_1",
       runId: started.runId,
       type: "run.completed",
+      timestamp: "2026-06-30T00:00:00.000Z",
       status: "completed",
       payload: { runId: started.runId },
     })
@@ -163,8 +165,10 @@ describe("SessionStore", () => {
         siteId: "site_1",
         sessionId: "ses_1",
         eventId: "evt_wrong_run",
+        conversationId: "ses_1",
         runId: "run_missing",
         type: "run.completed",
+        timestamp: "2026-06-30T00:00:00.000Z",
         status: "completed",
       }),
     ).rejects.toBeInstanceOf(SessionRunNotActiveError)
@@ -187,8 +191,10 @@ describe("SessionStore", () => {
         siteId: "site_1",
         sessionId: "ses_1",
         eventId: "evt_repeat",
+        conversationId: "ses_1",
         runId: started.runId,
         type: "message.delta",
+        timestamp: "2026-06-30T00:00:00.000Z",
         payload: { delta: "hello" },
       }),
     ).resolves.toEqual({ stored: true })
@@ -197,8 +203,10 @@ describe("SessionStore", () => {
         siteId: "site_1",
         sessionId: "ses_1",
         eventId: "evt_repeat",
+        conversationId: "ses_1",
         runId: started.runId,
         type: "message.delta",
+        timestamp: "2026-06-30T00:00:00.000Z",
         payload: { delta: "hello again" },
       }),
     ).resolves.toEqual({ stored: false })
@@ -208,8 +216,10 @@ describe("SessionStore", () => {
         siteId: "site_1",
         eventId: "evt_repeat",
         sessionId: "ses_1",
+        conversationId: "ses_1",
         runId: started.runId,
         type: "message.delta",
+        timestamp: "2026-06-30T00:00:00.000Z",
         payload: { delta: "hello" },
         createdAt: new Date("2026-06-30T00:00:00.000Z"),
       },
@@ -226,8 +236,10 @@ describe("SessionStore", () => {
         siteId: "site_1",
         sessionId: "ses_1",
         eventId: "evt_same",
+        conversationId: "ses_1",
         runId: "run_1",
         type: "message.delta",
+        timestamp: "2026-06-30T00:00:00.000Z",
       }),
     ).resolves.toEqual({ stored: true })
     await expect(
@@ -235,8 +247,10 @@ describe("SessionStore", () => {
         siteId: "site_2",
         sessionId: "ses_1",
         eventId: "evt_same",
+        conversationId: "ses_1",
         runId: other.runId,
         type: "message.delta",
+        timestamp: "2026-06-30T00:00:00.000Z",
       }),
     ).resolves.toEqual({ stored: true })
 

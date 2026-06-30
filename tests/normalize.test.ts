@@ -20,7 +20,7 @@ function makeNormalizer() {
   })
 }
 
-// transport cursor 是定宽零填充数字串；helper 把整数渲染成同样形态，seq 由 Number(cursor) 反解。
+// transport cursor 是定宽零填充数字串；Normalizer 只把它当调用方原始位置，不作为排序真源。
 const CURSOR_WIDTH = 20
 function cursor(n: number): string {
   return String(n).padStart(CURSOR_WIDTH, "0")
@@ -59,8 +59,7 @@ describe("Normalizer", () => {
     const out = f.feed(started)
 
     expect(out.map((e) => e.event)).toEqual(["session.created", "run.created"])
-    // 合成的两条共享同一 cursor 派生的 seq 0。
-    expect(out.map((e) => e.seq)).toEqual([0, 0])
+    expect(out.every((event) => !("seq" in event))).toBe(true)
     expect(out[0]?.payload).toMatchObject({
       session_id: "ses_01",
       conversation_id: "conv_01",
@@ -78,11 +77,11 @@ describe("Normalizer", () => {
     expect(new Set(out.map((e) => e.event_id)).size).toBe(2)
   })
 
-  test("a second started does NOT re-emit session.created", () => {
+  test("a second started does not re-emit run lifecycle events", () => {
     const f = makeFeeder(makeNormalizer())
     f.feed(started)
     const out = f.feed(started)
-    expect(out.map((e) => e.event)).toEqual(["run.created"])
+    expect(out).toEqual([])
   })
 
   test("text_chunk (no subagent, final=false) maps to message.delta passing segment_id through", () => {
@@ -144,53 +143,53 @@ describe("Normalizer", () => {
     expect(out[0]?.payload).toMatchObject({ error_kind: "timeout", message: "boom" })
   })
 
-  test("seq derives from transport cursor and is monotonic non-decreasing across the run", () => {
+  test("normalized events do not carry seq", () => {
     const f = makeFeeder(makeNormalizer())
     const all = [
       ...f.feed(started),
       ...f.feed({ event: "text_chunk", ...ENV, data: { segment_id: "m1", text: "a", final: false } }),
       ...f.feed({ event: "agent_done", ...ENV, data: { status: "completed", usage: {} } }),
     ]
-    // started 合成两条共享 cursor 0 → seq 0；其后 cursor 1/2 → seq 1/2，数组单调非降。
-    const seqs = all.map((e) => e.seq)
-    expect(seqs).toEqual([0, 0, 1, 2])
-    const sorted = [...seqs].sort((a, b) => a - b)
-    expect(seqs).toEqual(sorted)
+    expect(all.every((event) => !("seq" in event))).toBe(true)
   })
 
-  // 回归：真 RedisStream 游标是 `<ms>-<seq>`（非定宽数字串）。此前所有用例都用 MemoryStream 形态
-  // 的数字游标，漏掉这一格——Number("1782540325240-0")=NaN 会让每条事件被当脏事件丢弃、redis 后端
-  // SSE 全断（真·跨进程 e2e 抓出）。seq 取 `-` 前首段（毫秒，单调可序）；全串仍作去重/event_id。
-  test("derives a finite seq from a real Redis stream cursor `<ms>-<seq>` (MemoryStream-only blind spot)", () => {
+  test("accepts a real Redis stream cursor without projecting it into the event", () => {
     const out = makeNormalizer().ingest(started, "1782540325240-0")
     expect(out.length).toBeGreaterThan(0)
-    expect(out.every((e) => Number.isFinite(e.seq))).toBe(true)
-    expect(out[0]?.seq).toBe(1782540325240)
+    expect(out.every((event) => !("seq" in event))).toBe(true)
+    expect(out[0]?.event_id).not.toContain("1782540325240")
   })
 
-  test("cursor-derived seq is carried as a first-class field", () => {
+  test("raw event identity controls event_id without exposing transport cursor", () => {
     const f = makeFeeder(makeNormalizer())
     const out = f.at(started, 0)
-    expect(out.map((e) => e.seq)).toEqual([0, 0])
-    const delta = f.at(
+    const deltaA = f.at(
       { event: "text_chunk", ...ENV, data: { segment_id: "m1", text: "hi", final: false } },
       7,
     )
-    expect(delta[0]?.seq).toBe(7)
+    const deltaB = f.at(
+      { event: "text_chunk", ...ENV, data: { segment_id: "m1", text: "hi", final: false } },
+      8,
+    )
+    expect(out.every((event) => !("seq" in event))).toBe(true)
+    expect(deltaA[0]?.event_id).not.toBe(deltaB[0]?.event_id)
+    expect(deltaA[0]?.event_id).not.toContain(cursor(7))
   })
 
-  test("idempotent: same cursor fed twice produces output only once (cursor dedup)", () => {
+  test("same raw text event produces stable event IDs; relay/store owns deduplication", () => {
     const f = makeFeeder(makeNormalizer())
-    const first = f.at(started, 0)
-    const second = f.at(started, 0)
-    expect(first).toHaveLength(2)
-    expect(second).toEqual([])
+    const raw = { event: "text_chunk", ...ENV, data: { segment_id: "m1", text: "hi", final: false } }
+    const first = f.at(raw, 1)
+    const second = f.at(raw, 1)
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(1)
+    expect(second[0]?.event).toBe("message.delta")
+    expect(second[0]?.event_id).toBe(first[0]?.event_id)
   })
 
-  test("terminal events are exempt from cursor dedup so a reused cursor cannot swallow the run's end", () => {
+  test("terminal events are normal events; store-level idempotency owns duplicate suppression", () => {
     const f = makeFeeder(makeNormalizer())
     f.at(started, 0)
-    // 工具事件先用掉 cursor 5；若同一 cursor 复用发终态，普通去重会把它吞掉致 relay 永不收束。
     const tool = f.at(
       { event: "tool_call_start", ...ENV, data: { segment_id: "m1", tool_id: "t1", name: "now", args: {} } },
       5,
@@ -203,7 +202,7 @@ describe("Normalizer", () => {
     expect(done.map((e) => e.event)).toEqual(["run.completed"])
   })
 
-  test("event_id derives from (request_id, cursor, event) — replays and replicas produce identical envelopes", () => {
+  test("event_id derives from stable raw entry identity and stays opaque", () => {
     const feed = (n: Normalizer) => {
       const f = makeFeeder(n)
       return [
@@ -216,12 +215,15 @@ describe("Normalizer", () => {
     const b = feed(makeNormalizer())
 
     expect(a.map((e) => e.event_id)).toEqual(b.map((e) => e.event_id))
-    expect(a[0]?.event_id).toBe(`evt_run_x_${cursor(0)}_session.created`)
-    expect(a[1]?.event_id).toBe(`evt_run_x_${cursor(0)}_run.created`)
-    expect(a[2]?.event_id).toBe(`evt_run_x_${cursor(1)}_message.delta`)
-    expect(a[3]?.event_id).toBe(`evt_run_x_${cursor(2)}_run.completed`)
+    expect(a.every((e) => /^evt_[0-9a-f]{32}$/.test(e.event_id))).toBe(true)
     // 合成两条共享 cursor 0，靠 event 名保持唯一。
     expect(new Set(a.map((e) => e.event_id)).size).toBe(a.length)
+
+    const repeatedPayloadDifferentEntry = makeNormalizer().ingest(
+      { event: "text_chunk", ...ENV, data: { segment_id: "m1", text: "a", final: false } },
+      "different-redis-cursor",
+    )
+    expect(repeatedPayloadDifferentEntry[0]?.event_id).not.toBe(a[2]?.event_id)
   })
 
   test("schema collapse: malformed agent event throws", () => {

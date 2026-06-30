@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto"
+
 import { agentEventSchema, type AgentEvent } from "../domain/agent-event"
 import { parseSessionEvent, type AguiPayload, type SessionEvent } from "../domain/session-event"
 
 // 把 agent canonical wire 事件归一化成 AG-UI 信封；注入 clock 让时间戳在测试里确定。
-// agent 不再发 seq；定序/去重靠 transport cursor（零填充数字串），seq 由 cursor 派生。
 
 export type NormalizerBinding = {
   sessionId: string
@@ -18,48 +19,29 @@ export class Normalizer {
   private readonly binding: NormalizerBinding
   private readonly clock: NormalizerClock
   private sessionCreated = false
-  private readonly seenCursors = new Set<string>()
+  private runCreated = false
 
   constructor(binding: NormalizerBinding, clock: NormalizerClock) {
     this.binding = binding
     this.clock = clock
   }
 
-  ingest(raw: unknown, cursor: string): SessionEvent[] {
+  ingest(raw: unknown, rawId: string): SessionEvent[] {
     // 入站严格校验：缺字段 / 多余键 / 未知 event 直接抛，不将脏事件归一化进 replay。
     const event = agentEventSchema.parse(raw)
 
-    // seq 由 transport cursor 派生：cursor 是 transport 原生格式——MemoryStream 是定宽数字串，
-    // RedisStream 是原生 stream id `<ms>-<seq>`（resume 的 XREAD 须用原格式，不能伪造成数字）。
-    // 取首段（`-` 前）得单调可序数：memory 串无 `-` → 整串；redis → 毫秒部分（同 ms 并列、由到达序稳定）。
-    // 全串仍作去重锚（seenCursors）与 event_id；否则 Number(redis cursor) = NaN，每条事件被当脏事件丢弃。
-    const seq = Number(cursor.split("-")[0])
-
     const envelopes = this.mapEvent(event)
 
-    // 幂等：同一 cursor 重复输入只产出一次。终态(run.completed/run.failed)豁免去重：
-    // 若同一 cursor 复用发终态，去重会丢弃它，导致 relay 永不收束、web 停留在「进行中」；
-    // 重复终态由 web 端 event_id 去重处理。
-    const isTerminal = envelopes.some(
-      (e) => e.event === "run.completed" || e.event === "run.failed",
-    )
-    if (!isTerminal && this.seenCursors.has(cursor)) {
-      return []
-    }
-    this.seenCursors.add(cursor)
-
-    // 出站自检：每个信封过 AG-UI 解析器；透传由 cursor 派生的 seq。
-    // event_id 确定性派生自 (request_id, cursor, event)：重启/多副本重放产生同一 id，web 去重幂等。
+    // 出站自检：每个信封过 AG-UI 解析器；event_id 是 opaque idempotency id。
     return envelopes.map((envelope) =>
       parseSessionEvent({
         ...envelope,
-        seq,
-        event_id: `evt_${event.request_id}_${cursor}_${envelope.event}`,
+        event_id: stableEventId(event, envelope.event, rawId),
       }),
     )
   }
 
-  private mapEvent(event: AgentEvent): Omit<SessionEvent, "seq" | "event_id">[] {
+  private mapEvent(event: AgentEvent): Omit<SessionEvent, "event_id">[] {
     switch (event.event) {
       case "agent_status":
         return this.mapStatus(event.data, event.request_id)
@@ -130,11 +112,11 @@ export class Normalizer {
   private mapStatus(
     data: Extract<AgentEvent, { event: "agent_status" }>["data"],
     requestId: string,
-  ): Omit<SessionEvent, "seq" | "event_id">[] {
+  ): Omit<SessionEvent, "event_id">[] {
     switch (data.status) {
       case "started": {
         // 维持现有 run.started 行为：首次合成 session.created，再发 run.created。
-        const envelopes: Omit<SessionEvent, "seq" | "event_id">[] = []
+        const envelopes: Omit<SessionEvent, "event_id">[] = []
         if (!this.sessionCreated) {
           this.sessionCreated = true
           envelopes.push(
@@ -146,7 +128,10 @@ export class Normalizer {
             }),
           )
         }
-        envelopes.push(this.envelope("run.created", { run_id: requestId }))
+        if (!this.runCreated) {
+          this.runCreated = true
+          envelopes.push(this.envelope("run.created", { run_id: requestId }))
+        }
         return envelopes
       }
       case "todo_updated":
@@ -189,7 +174,7 @@ export class Normalizer {
 
   private mapTextChunk(
     data: Extract<AgentEvent, { event: "text_chunk" }>["data"],
-  ): Omit<SessionEvent, "seq" | "event_id">[] {
+  ): Omit<SessionEvent, "event_id">[] {
     if (data.subagent_id !== undefined) {
       // 子智能体文本走独立通道，按 final 分增量 / 终态。
       if (data.final) {
@@ -234,7 +219,7 @@ export class Normalizer {
   private envelope<E extends SessionEvent["event"]>(
     event: E,
     payload: AguiPayload<E>,
-  ): Omit<SessionEvent, "seq" | "event_id"> {
+  ): Omit<SessionEvent, "event_id"> {
     return {
       event,
       session_id: this.binding.sessionId,
@@ -244,4 +229,30 @@ export class Normalizer {
       payload,
     }
   }
+}
+
+function stableEventId(event: AgentEvent, sessionEvent: SessionEvent["event"], rawId: string): string {
+  const identity = stableJson({
+    raw_id: rawId,
+    request_id: event.request_id,
+    agent_event: event.event,
+    session_event: sessionEvent,
+    data: event.data,
+  })
+  return `evt_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`
+  }
+  return JSON.stringify(value)
 }

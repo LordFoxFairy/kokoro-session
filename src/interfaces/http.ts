@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { z, ZodError } from "zod"
 
-import type { MessageStore, StreamProtocol } from "../application/event-stream"
+import type { StreamProtocol } from "../application/event-stream"
 import { sendRunControl } from "../application/send-run-control"
 import type { SessionStore } from "../application/session-store"
 import { SessionRunActiveError } from "../application/session-store"
@@ -32,7 +32,6 @@ function applyBrowserHeaders(req: IncomingMessage, res: ServerResponse): void {
 
 export type BuildServerDependencies = {
   bus: StreamProtocol
-  messageStore: MessageStore
   sessionStore: SessionStore
 }
 
@@ -66,7 +65,7 @@ const routes: Route[] = [
     method: "GET",
     pattern: /^\/sessions\/(?<sessionId>[^/]+)\/stream$/,
     handle: (ctx) =>
-      streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.deps.messageStore, ctx.params.sessionId!),
+      streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.deps.sessionStore, siteIdFrom(ctx.req), ctx.params.sessionId!),
   },
   {
     method: "POST",
