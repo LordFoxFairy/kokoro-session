@@ -13,7 +13,7 @@ redis live 总线（有界实时）** → SSE = **DB 历史回放 + live tail** 
 src/
 ├── domain/          agent-event.ts（入站契约）/ session-event.ts（出站 AGUI 契约）/ run-request.ts
 ├── application/     normalize（13-kind → AGUI 信封）/ dispatch-relays / relay-run / start-run / ports
-├── infrastructure/  message-store（sqlite 默认/mongo/memory，持久真源）/ live-bus（redis 有界实时）/ sse / stream（memory + redis）
+├── infrastructure/  message-store（mongo 默认/memory 测试，持久真源）/ live-bus（redis 有界实时）/ sse / stream（memory + redis）
 └── interfaces/      http.ts（POST /runs + GET /stream）/ sse-endpoint / main.ts
 ```
 
@@ -30,9 +30,11 @@ KOKORO_STREAM_BACKEND=redis KOKORO_REDIS_URL=redis://127.0.0.1:6379/10 bun run s
 **实时总线** `KOKORO_STREAM_BACKEND`：`memory`（默认，单机）/ `redis`（`KOKORO_REDIS_URL`）。
 
 **历史持久库** `KOKORO_MESSAGE_STORE_BACKEND`：
-- `sqlite`（默认，本地落盘零依赖，路径 `KOKORO_MESSAGE_STORE_DB`，默认 `kokoro-session-messages.db`）
-- `mongo`（跨 pod，`KOKORO_MESSAGE_STORE_MONGO_URL` + `KOKORO_MESSAGE_STORE_MONGO_DB`）
-- `memory`（易失，测试用）
+- `mongo`（默认，跨 pod，`KOKORO_MESSAGE_STORE_MONGO_URL` + `KOKORO_MESSAGE_STORE_MONGO_DB`）
+- `memory`（易失，仅测试用）
+
+Session runtime 不提供 SQLite 策略，避免本地文件库成为第二套事实源。本地开发应通过 Docker/Compose 起 Mongo；
+单元测试使用 `memory` fake，Mongo 行为用集成测试覆盖。
 
 `KOKORO_WEB_ORIGIN` 配 CORS 放通的浏览器源（默认 `http://127.0.0.1:3000` + `localhost:3000`）。
 
@@ -42,7 +44,6 @@ KOKORO_STREAM_BACKEND=redis KOKORO_REDIS_URL=redis://127.0.0.1:6379/10 bun run s
 bun test                  # 单元 + 集成（redis/mongo 集成不可达则 skip，不 fail）
 bun run typecheck
 bun run lint
-bun run e2e:redis-sqlite  # 真·跨进程 e2e：redis live + sqlite 历史，删 live 流后仍从 DB 全量重放（需 docker）
 ```
 
 ## 关键不变量

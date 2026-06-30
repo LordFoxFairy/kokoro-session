@@ -12,7 +12,7 @@ type MessageDoc = {
   event: SessionEvent
 }
 
-// 跨 pod 持久消息库：与 sqlite 同一 cursor-keyed 契约。到达序由 ObjectId(_id) 单调兜（ordered 写保插入序），
+// 跨 pod 持久消息库：按 cursor-keyed 契约持久化 session 事件。到达序由 ObjectId(_id) 单调兜（ordered 写保插入序），
 // (session_id, event_id) 唯一索引作幂等去重锚（relay 重启以新 cursor 重投 → upsert $setOnInsert 保首条）。
 export class MongoMessageStore implements MessageStore {
   private readonly coll: Collection<MessageDoc>

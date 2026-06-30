@@ -24,7 +24,7 @@ export type StoredEvent = {
   event: SessionEvent
 }
 
-// 会话消息的持久真源（sqlite 默认本地落盘 / mongo 跨 pod / memory 易失）：长期历史从 redis 卸到 DB，
+// 会话消息的持久真源（mongo 跨 pod / memory 仅测试）：长期历史从 redis 卸到 DB，
 // redis 退为有界实时总线。append 按 event_id 幂等去重（relay 重启会以新 cursor 重投同一事件，保首条 cursor
 // 稳定）；read 按到达序回放，afterCursor 增量续点（未知 cursor 退回全量，web event_id 去重兜底，绝不空流）。
 export interface MessageStore {

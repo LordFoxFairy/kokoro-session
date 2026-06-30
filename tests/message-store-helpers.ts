@@ -19,7 +19,7 @@ export function stored(sessionId: string, cursor: string, eventId: string): Stor
 }
 
 // 行为矩阵：按到达序回放、event_id 幂等去重（重投保首条 cursor）、afterCursor 增量、limit、会话隔离。
-// 三后端（memory/sqlite/mongo）共用此契约断言，保证可替换。
+// MessageStore 后端共用此契约断言，保证 memory fake 与 Mongo 持久实现行为一致。
 export async function assertBehaviour(store: MessageStore): Promise<void> {
   const sid = "ses_a"
   await store.append(sid, [

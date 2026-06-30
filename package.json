@@ -8,8 +8,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "start": "bun run src/main.ts",
-    "dev": "bun --watch src/main.ts",
-    "e2e:redis-sqlite": "bash scripts/redis-sqlite-e2e.sh"
+    "dev": "bun --watch src/main.ts"
   },
   "dependencies": {
     "ioredis": "^5.4.1",
