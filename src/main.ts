@@ -1,7 +1,9 @@
 import { z } from "zod"
+import { MongoClient } from "mongodb"
 
 import { dispatchRelays } from "./application/dispatch-relays"
 import { makeMessageStore } from "./infrastructure/message-store"
+import { MongoSessionStore } from "./infrastructure/session-store"
 import { makeStream } from "./infrastructure/stream"
 import { buildServer } from "./interfaces/http"
 
@@ -18,12 +20,16 @@ function main(): void {
   const port = resolvePort(process.env.KOKORO_SESSION_PORT)
   const bus = makeStream()
   const messageStore = makeMessageStore()
+  const sessionStore = new MongoSessionStore(
+    new MongoClient(process.env.KOKORO_SESSION_STORE_MONGO_URL ?? "mongodb://127.0.0.1:27017"),
+    { dbName: process.env.KOKORO_SESSION_STORE_MONGO_DB ?? "kokoro_session" },
+  )
 
   void dispatchRelays(bus, messageStore).catch((error: unknown) => {
     console.error("dispatch loop crashed", error)
   })
 
-  const server = buildServer({ bus, messageStore })
+  const server = buildServer({ bus, messageStore, sessionStore })
   server.on("error", (error: unknown) => {
     console.error(`kokoro-session failed to bind :${port}`, error)
     process.exit(1)

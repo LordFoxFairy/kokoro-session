@@ -20,7 +20,7 @@ export async function dispatchRelays(
     const normalizer = new Normalizer(
       {
         sessionId: request.session_id,
-        conversationId: request.conversation_id,
+        conversationId: request.session_id,
         runId: request.run_id,
       },
       { now: () => new Date() },

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
+import { MemorySessionStore } from "../src/application/session-store"
 import { startRun } from "../src/application/start-run"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
 import { parseSessionEvent, type SessionEvent } from "../src/domain/session-event"
@@ -18,19 +19,33 @@ async function readReplay(
 }
 
 describe("startRun", () => {
-  test("generates a run id and publishes a valid run.request to the requests stream", async () => {
+  function makeSessionStore(): MemorySessionStore {
+    let messageNumber = 0
+    let runNumber = 0
+    return new MemorySessionStore({
+      now: () => new Date("2026-06-30T00:00:00.000Z"),
+      newMessageId: () => `msg_${++messageNumber}`,
+      newRunId: () => `run_${++runNumber}`,
+    })
+  }
+
+  test("creates session records and publishes a valid run.request to the requests stream", async () => {
     const bus = new MemoryStream()
-    const { runId } = await startRun(
+    const sessionStore = makeSessionStore()
+    const result = await startRun(
       {
+        siteId: "site_1",
+        userId: "user_1",
         sessionId: "ses_01",
-        conversationId: "conv_01",
-        input: "hello kokoro",
+        idempotencyKey: "idem_1",
+        content: "hello kokoro",
         executionStyle: "fast",
       },
-      { bus },
+      { bus, sessionStore },
     )
 
-    expect(runId).toMatch(/^run_/)
+    expect(result).toEqual({ messageId: "msg_1", assistantMessageId: "msg_2", runId: "run_1" })
+    await expect(sessionStore.listMessages("site_1", "ses_01")).resolves.toHaveLength(2)
 
     const requests = await bus.readAll(REQUESTS_STREAM)
     expect(requests).toHaveLength(1)
@@ -38,39 +53,37 @@ describe("startRun", () => {
     const parsed = runRequestSchema.parse(requests[0]?.event)
     expect(parsed).toMatchObject({
       kind: "run.request",
-      run_id: runId,
+      site_id: "site_1",
+      run_id: "run_1",
       session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello kokoro",
-      execution_style: "fast",
+      agent_run_input: {
+        siteId: "site_1",
+        userId: "user_1",
+        inputMessageId: "msg_1",
+        assistantMessageId: "msg_2",
+        context: { recentMessages: [{ content: "hello kokoro" }, { content: "" }] },
+        executionStyle: "fast",
+      },
     })
   })
 
-  test("defaults conversation_id to session_id when omitted", async () => {
+  test("same idempotency key republishes the same run identity", async () => {
     const bus = new MemoryStream()
-    const { runId } = await startRun(
-      { sessionId: "ses_02", input: "hi" },
-      { bus },
-    )
-    const requests = await bus.readAll(REQUESTS_STREAM)
-    const parsed = runRequestSchema.parse(requests.at(-1)?.event)
-    expect(parsed.conversation_id).toBe("ses_02")
-    expect(parsed.run_id).toBe(runId)
-    expect(parsed.execution_style).toBeUndefined()
-  })
+    const sessionStore = makeSessionStore()
+    const input = {
+      siteId: "site_1",
+      userId: "user_1",
+      sessionId: "ses_02",
+      idempotencyKey: "idem_1",
+      content: "hi",
+    }
 
-  test("fails loud on an empty executionStyle instead of silently dropping it", async () => {
-    const bus = new MemoryStream()
-    await expect(
-      startRun({ sessionId: "ses_03", input: "hi", executionStyle: "" }, { bus }),
-    ).rejects.toThrow()
-  })
+    const first = await startRun(input, { bus, sessionStore })
+    const retry = await startRun(input, { bus, sessionStore })
 
-  test("each run gets a distinct run id", async () => {
-    const bus = new MemoryStream()
-    const a = await startRun({ sessionId: "ses_03", input: "a" }, { bus })
-    const b = await startRun({ sessionId: "ses_03", input: "b" }, { bus })
-    expect(a.runId).not.toBe(b.runId)
+    expect(retry).toEqual(first)
+    const requests = (await bus.readAll(REQUESTS_STREAM)).map((item) => runRequestSchema.parse(item.event))
+    expect(requests.map((request) => request.run_id)).toEqual(["run_1", "run_1"])
   })
 })
 

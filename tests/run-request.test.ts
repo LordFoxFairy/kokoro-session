@@ -2,76 +2,100 @@ import { describe, expect, test } from "bun:test"
 
 import { runRequestSchema } from "../src/domain/run-request"
 
+function agentRunInput() {
+  return {
+    siteId: "site_1",
+    workspaceId: null,
+    projectId: null,
+    sessionId: "ses_01",
+    runId: "run_01",
+    userId: "user_1",
+    inputMessageId: "msg_1",
+    assistantMessageId: "msg_2",
+    context: {
+      recentMessages: [{ messageId: "msg_1", role: "user", content: "hello" }],
+      summary: null,
+      artifactRefs: [],
+      toolResultRefs: [],
+      userProvidedFiles: [],
+    },
+    modelRuntime: { provider: "default", model: "default" },
+    executionStyle: "fast",
+    permissionMode: "auto",
+    backendPolicy: { backend: "default" },
+    enabledSkills: [],
+    enabledMcpServers: [],
+    enabledTools: [],
+    traceContext: { requestId: "idem_1" },
+  }
+}
+
 describe("runRequestSchema", () => {
   test("accepts a well-formed run.request", () => {
     const parsed = runRequestSchema.parse({
       kind: "run.request",
+      site_id: "site_1",
       run_id: "run_01",
       session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello",
+      agent_run_input: agentRunInput(),
     })
-    expect(parsed.input).toBe("hello")
-    expect(parsed.execution_style).toBeUndefined()
+    expect(parsed.agent_run_input.context.recentMessages[0]?.content).toBe("hello")
+    expect(parsed.agent_run_input.executionStyle).toBe("fast")
   })
 
-  test("accepts optional execution_style", () => {
+  test("accepts thinking executionStyle inside agent_run_input", () => {
     const parsed = runRequestSchema.parse({
       kind: "run.request",
+      site_id: "site_1",
       run_id: "run_01",
       session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello",
-      execution_style: "thinking",
+      agent_run_input: { ...agentRunInput(), executionStyle: "thinking" },
     })
-    expect(parsed.execution_style).toBe("thinking")
+    expect(parsed.agent_run_input.executionStyle).toBe("thinking")
   })
 
-  test("rejects execution_style outside fast/thinking", () => {
+  test("rejects executionStyle outside fast/thinking", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.request",
+        site_id: "site_1",
         run_id: "run_01",
         session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
-        execution_style: "default",
+        agent_run_input: { ...agentRunInput(), executionStyle: "default" },
       }),
     ).toThrow()
   })
 
-  test("accepts optional permission_mode", () => {
+  test("accepts permissionMode inside agent_run_input", () => {
     const parsed = runRequestSchema.parse({
       kind: "run.request",
+      site_id: "site_1",
       run_id: "run_01",
       session_id: "ses_01",
-      conversation_id: "conv_01",
-      input: "hello",
-      permission_mode: "plan",
+      agent_run_input: { ...agentRunInput(), permissionMode: "plan" },
     })
-    expect(parsed.permission_mode).toBe("plan")
+    expect(parsed.agent_run_input.permissionMode).toBe("plan")
   })
 
-  test("rejects permission_mode outside auto/default/plan", () => {
+  test("rejects permissionMode outside auto/default/plan", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.request",
+        site_id: "site_1",
         run_id: "run_01",
         session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
-        permission_mode: "bogus",
+        agent_run_input: { ...agentRunInput(), permissionMode: "bogus" },
       }),
     ).toThrow()
   })
 
-  test("requires input", () => {
+  test("requires agent_run_input", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.request",
+        site_id: "site_1",
         run_id: "run_01",
         session_id: "ses_01",
-        conversation_id: "conv_01",
       }),
     ).toThrow()
   })
@@ -80,10 +104,10 @@ describe("runRequestSchema", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.request",
+        site_id: "site_1",
         run_id: "run_01",
         session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
+        agent_run_input: agentRunInput(),
         rogue: true,
       }),
     ).toThrow()
@@ -93,10 +117,10 @@ describe("runRequestSchema", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.started",
+        site_id: "site_1",
         run_id: "run_01",
         session_id: "ses_01",
-        conversation_id: "conv_01",
-        input: "hello",
+        agent_run_input: agentRunInput(),
       }),
     ).toThrow()
   })

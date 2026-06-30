@@ -1,16 +1,15 @@
 import { z } from "zod"
 
+import { agentRunInputSchema } from "./agent-run-input"
+
 // run 请求信封（session 写出到 kokoro:runs:requests）。run_id 由 session 生成。
 export const runRequestSchema = z
   .object({
     kind: z.literal("run.request"),
+    site_id: z.string().min(1),
     run_id: z.string().min(1),
     session_id: z.string().min(1),
-    conversation_id: z.string().min(1),
-    input: z.string().min(1),
-    execution_style: z.enum(["fast", "thinking"]).optional(),
-    // 权限档位（Claude-Code 式）：缺省 = auto（agent 侧默认全放行）。
-    permission_mode: z.enum(["auto", "default", "plan"]).optional(),
+    agent_run_input: agentRunInputSchema,
   })
   .strict()
 

@@ -4,7 +4,10 @@ import { z, ZodError } from "zod"
 
 import type { MessageStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl } from "../application/send-run-control"
+import type { SessionStore } from "../application/session-store"
+import { SessionRunActiveError } from "../application/session-store"
 import { startRun } from "../application/start-run"
+import { attachmentRefSchema } from "../domain/agent-run-input"
 import { runControlBodySchema } from "../domain/run-control"
 import { streamSession } from "./sse-endpoint"
 
@@ -21,23 +24,17 @@ function applyBrowserHeaders(req: IncomingMessage, res: ServerResponse): void {
     res.setHeader("vary", "origin")
   }
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS")
-  res.setHeader("access-control-allow-headers", "content-type")
+  res.setHeader(
+    "access-control-allow-headers",
+    "content-type,x-kokoro-site-id,x-kokoro-user-id,x-kokoro-workspace-id,x-kokoro-project-id",
+  )
 }
 
 export type BuildServerDependencies = {
   bus: StreamProtocol
   messageStore: MessageStore
+  sessionStore: SessionStore
 }
-
-// 入站 query 在 interfaces 层一次性 Zod 解析：空 input → ZodError → 顶层 400；.strip 兜底滤未知键。
-const startRunQuerySchema = z
-  .object({
-    input: z.string().min(1),
-    conversation_id: z.string().optional(),
-    execution_style: z.string().optional(),
-    permission_mode: z.string().optional(),
-  })
-  .strip()
 
 type Route = {
   method: "GET" | "POST"
@@ -57,8 +54,13 @@ type RouteContext = {
 const routes: Route[] = [
   {
     method: "POST",
-    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/runs$/,
-    handle: handleStartRun,
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/messages$/,
+    handle: handlePostMessage,
+  },
+  {
+    method: "GET",
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)$/,
+    handle: handleGetSession,
   },
   {
     method: "GET",
@@ -73,28 +75,78 @@ const routes: Route[] = [
   },
 ]
 
-async function handleStartRun(ctx: RouteContext): Promise<void> {
-  // 逐键取首值（与 URLSearchParams.get 一致）：重复键退化为最后值会悄悄换语义；null→undefined 交 .optional。
-  const params = ctx.url.searchParams
-  const query = startRunQuerySchema.parse({
-    input: params.get("input") ?? undefined,
-    conversation_id: params.get("conversation_id") ?? undefined,
-    execution_style: params.get("execution_style") ?? undefined,
-    permission_mode: params.get("permission_mode") ?? undefined,
+function headerValue(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name]
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+
+function siteIdFrom(req: IncomingMessage): string {
+  return headerValue(req, "x-kokoro-site-id") ?? "site_default"
+}
+
+function userIdFrom(req: IncomingMessage): string {
+  return headerValue(req, "x-kokoro-user-id") ?? "user_default"
+}
+
+const messageBodySchema = z
+  .object({
+    idempotencyKey: z.string().min(1),
+    content: z.string().min(1),
+    attachments: z.array(attachmentRefSchema).optional(),
+    executionStyle: z.enum(["fast", "thinking"]).optional(),
+    permissionMode: z.enum(["auto", "default", "plan"]).optional(),
+    selectedSkillIds: z.array(z.string().min(1)).optional(),
+    selectedMcpServerIds: z.array(z.string().min(1)).optional(),
+    selectedToolNames: z.array(z.string().min(1)).optional(),
   })
+  .strict()
+
+async function handlePostMessage(ctx: RouteContext): Promise<void> {
+  const body = messageBodySchema.parse(jsonBodySchema.parse(await readBody(ctx.req)))
   const result = await startRun(
     {
+      siteId: siteIdFrom(ctx.req),
+      userId: userIdFrom(ctx.req),
+      workspaceId: headerValue(ctx.req, "x-kokoro-workspace-id") ?? null,
+      projectId: headerValue(ctx.req, "x-kokoro-project-id") ?? null,
       sessionId: ctx.params.sessionId!,
-      conversationId: query.conversation_id,
-      input: query.input,
-      executionStyle: query.execution_style,
-      permissionMode: query.permission_mode,
+      idempotencyKey: body.idempotencyKey,
+      content: body.content,
+      attachments: body.attachments,
+      executionStyle: body.executionStyle,
+      permissionMode: body.permissionMode,
+      selectedSkillIds: body.selectedSkillIds,
+      selectedMcpServerIds: body.selectedMcpServerIds,
+      selectedToolNames: body.selectedToolNames,
     },
-    { bus: ctx.deps.bus },
+    { bus: ctx.deps.bus, sessionStore: ctx.deps.sessionStore },
   )
-  ctx.res.statusCode = 200
+  ctx.res.statusCode = 202
   ctx.res.setHeader("content-type", "application/json")
   ctx.res.end(JSON.stringify(result))
+}
+
+async function handleGetSession(ctx: RouteContext): Promise<void> {
+  const siteId = siteIdFrom(ctx.req)
+  const sessionId = ctx.params.sessionId!
+  const [session, messages, runs, events] = await Promise.all([
+    ctx.deps.sessionStore.getSession(siteId, sessionId),
+    ctx.deps.sessionStore.listMessages(siteId, sessionId),
+    ctx.deps.sessionStore.listRuns(siteId, sessionId),
+    ctx.deps.sessionStore.listEvents(siteId, sessionId),
+  ])
+  ctx.res.statusCode = 200
+  ctx.res.setHeader("content-type", "application/json")
+  ctx.res.end(
+    JSON.stringify({
+      session,
+      messages,
+      runs,
+      events,
+      eventWatermark: events.at(-1)?.eventId ?? null,
+    }),
+  )
 }
 
 // 请求体 JSON 解析：决策数组（含 edit 的 edited_action）可大于 query 串上限，故走 body。非法
@@ -148,6 +200,12 @@ export function buildServer(dependencies: BuildServerDependencies) {
           .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
           .join("; ")
         res.end(JSON.stringify({ error: detail || "invalid request" }))
+        return
+      }
+      if (error instanceof SessionRunActiveError) {
+        res.statusCode = 409
+        res.setHeader("content-type", "application/json")
+        res.end(JSON.stringify({ error: error.message }))
         return
       }
       res.statusCode = 500

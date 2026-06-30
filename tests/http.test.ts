@@ -4,10 +4,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
-import { startRun } from "../src/application/start-run"
 import { REQUESTS_STREAM, runEventsStream } from "../src/application/stream-names"
-import { runRequestSchema } from "../src/domain/run-request"
 import type { SessionEvent } from "../src/domain/session-event"
+import { MemorySessionStore } from "../src/application/session-store"
 import { LIVE_STREAM_MAXLEN, liveStream } from "../src/infrastructure/live-bus"
 import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
@@ -16,7 +15,8 @@ import { buildServer } from "../src/interfaces/http"
 function makeDeps() {
   const bus = new MemoryStream()
   const messageStore = new MemoryMessageStore()
-  return { bus, messageStore }
+  const sessionStore = new MemorySessionStore()
+  return { bus, messageStore, sessionStore }
 }
 
 // 模拟 relay：先发布 live（拿 cursor）再持久 DB，返回各事件的 transport cursor（= SSE id 轴）。
@@ -52,18 +52,9 @@ afterEach(async () => {
   }
 })
 
-describe("POST /sessions/:id/runs", () => {
+describe("routing", () => {
   beforeEach(async () => {
     await listen(makeDeps())
-  })
-
-  test("returns 200 with a runId", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hello`, {
-      method: "POST",
-    })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { runId: string }
-    expect(body.runId).toMatch(/^run_/)
   })
 
   test("404 for unknown routes", async () => {
@@ -71,17 +62,9 @@ describe("POST /sessions/:id/runs", () => {
     expect(res.status).toBe(404)
   })
 
-  // 回归：重复 input 取首值（与 URLSearchParams.get 一致），不得退化为最后值。
-  test("a duplicated input query key resolves to the first value", async () => {
-    const deps = makeDeps()
-    await listen(deps)
-    const res = await fetch(`${baseUrl}/sessions/ses_dup_q/runs?input=first&input=second`, {
-      method: "POST",
-    })
-    expect(res.status).toBe(200)
-    const requests = await deps.bus.readAll(REQUESTS_STREAM)
-    const inputs = requests.map((r) => runRequestSchema.parse(r.event).input)
-    expect(inputs).toEqual(["first"])
+  test("old POST /sessions/:id/runs route is removed", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_dup_q/runs?input=first`, { method: "POST" })
+    expect(res.status).toBe(404)
   })
 })
 
@@ -91,10 +74,7 @@ describe("GET /sessions/:id/stream", () => {
     await listen(deps)
 
     const sessionId = "ses_sse"
-    const { runId } = await startRun(
-      { sessionId, input: "hello" },
-      { bus: deps.bus },
-    )
+    const runId = "run_sse"
 
     // 模拟 agent worker：把 canonical wire 事件回写到 run 事件流。
     const env = { request_id: runId, timestamp: 1700000000 }
@@ -396,24 +376,29 @@ describe("HTTP boundary contract", () => {
     await listen(makeDeps())
   })
 
-  test("400 with JSON error body locating to input when input is missing", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs`, { method: "POST" })
+  test("400 with JSON error body locating to content when content is missing", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "idem_1" }),
+    })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
     const body = (await res.json()) as { error: string }
-    expect(body.error).toContain("input")
+    expect(body.error).toContain("content")
   })
 
   // 非法枚举是客户端入参错误：必须 400 而非让 ZodError 穿透成 500。
-  test("400 when execution_style is not a known enum value", async () => {
-    const res = await fetch(
-      `${baseUrl}/sessions/ses_01/runs?input=hello&execution_style=bogus`,
-      { method: "POST" },
-    )
+  test("400 when executionStyle is not a known enum value", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "idem_1", content: "hello", executionStyle: "bogus" }),
+    })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
     const body = (await res.json()) as { error: string }
-    expect(body.error).toContain("execution_style")
+    expect(body.error).toContain("executionStyle")
   })
 
   // 错误方法打到已知资源路径：当前契约无专门 405，一律落 404——钉死之，避免静默行为漂移。
@@ -435,8 +420,10 @@ describe("HTTP error envelope", () => {
       throw new Error("redis down")
     }
     await listen(deps)
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hello`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "idem_1", content: "hello" }),
     })
     expect(res.status).toBe(500)
     expect(await res.text()).toBe("redis down")
@@ -567,11 +554,12 @@ describe("CORS", () => {
 
   // allowlist 之外的源不回显 allow-origin（浏览器侧拦截），但请求本身正常服务。
   test("omits allow-origin for a non-allowlisted origin while still serving the request", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_cors/runs?input=hello`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_cors/messages`, {
       method: "POST",
-      headers: { origin: "http://evil.example" },
+      headers: { origin: "http://evil.example", "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "idem_1", content: "hello" }),
     })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(202)
     expect(res.headers.get("access-control-allow-origin")).toBeNull()
   })
 })

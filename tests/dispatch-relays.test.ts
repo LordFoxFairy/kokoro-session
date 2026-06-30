@@ -6,6 +6,34 @@ import { parseSessionEvent, type SessionEvent } from "../src/domain/session-even
 import { MemoryMessageStore } from "../src/infrastructure/message-store"
 import { MemoryStream } from "../src/infrastructure/stream"
 
+function agentRunInput(runId: string) {
+  return {
+    siteId: "site_1",
+    workspaceId: null,
+    projectId: null,
+    sessionId: "ses_dispatch",
+    runId,
+    userId: "user_1",
+    inputMessageId: "msg_1",
+    assistantMessageId: "msg_2",
+    context: {
+      recentMessages: [{ messageId: "msg_1", role: "user", content: "hello" }],
+      summary: null,
+      artifactRefs: [],
+      toolResultRefs: [],
+      userProvidedFiles: [],
+    },
+    modelRuntime: { provider: "default", model: "default" },
+    executionStyle: "fast",
+    permissionMode: "auto",
+    backendPolicy: { backend: "default" },
+    enabledSkills: [],
+    enabledMcpServers: [],
+    enabledTools: [],
+    traceContext: { requestId: "idem_1" },
+  }
+}
+
 // relayRun 把归一化信封持久到 MessageStore（长期真源）；从中回读还原已落库的会话事件。
 async function readReplay(
   store: MemoryMessageStore,
@@ -40,10 +68,10 @@ describe("dispatchRelays", () => {
     await bus.publish(REQUESTS_STREAM, { kind: "run.request", injected: "evil" })
     await bus.publish(REQUESTS_STREAM, {
       kind: "run.request",
+      site_id: "site_1",
       run_id: runId,
       session_id: "ses_dispatch",
-      conversation_id: "ses_dispatch",
-      input: "hello",
+      agent_run_input: agentRunInput(runId),
     })
 
     // 合法 run 的 agent 事件已就绪，relay 一启动即可收束。
