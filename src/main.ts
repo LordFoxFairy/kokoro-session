@@ -1,3 +1,6 @@
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
 import { z } from "zod"
 import { MongoClient } from "mongodb"
 
@@ -37,6 +40,10 @@ function main(): void {
   })
 }
 
+function isMainModule(metaUrl: string, argv1: string | undefined): boolean {
+  return argv1 !== undefined && fileURLToPath(metaUrl) === resolve(argv1)
+}
+
 process.on("unhandledRejection", (reason: unknown) => {
   console.error("unhandledRejection", reason)
   process.exit(1)
@@ -48,6 +55,6 @@ process.on("uncaughtException", (error: unknown) => {
 })
 
 // 仅作为入口直接运行时启动服务；被测试 import 时不应拉起 HTTP 监听。
-if (import.meta.main) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main()
 }

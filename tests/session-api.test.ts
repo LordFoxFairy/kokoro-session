@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net"
 
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "vitest"
 
 import { REQUESTS_STREAM } from "../src/application/stream-names"
 import { runRequestSchema } from "../src/domain/run-request"

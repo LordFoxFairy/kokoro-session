@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { dispatchRelays } from "../src/application/dispatch-relays"
 import { MemorySessionStore } from "../src/application/session-store"

@@ -24,8 +24,8 @@ src/
 ## 运行
 
 ```bash
-bun install
-KOKORO_STREAM_BACKEND=redis KOKORO_REDIS_URL=redis://127.0.0.1:6379/10 bun run src/main.ts
+npm install
+KOKORO_STREAM_BACKEND=redis KOKORO_REDIS_URL=redis://127.0.0.1:6379/10 npm run start
 # 默认 :3001；POST /messages 开 run，GET /stream 订阅 SSE
 ```
 
@@ -46,9 +46,9 @@ Mongo 行为用集成测试覆盖。
 ## 门禁
 
 ```bash
-bun test                  # 单元 + 集成（redis/mongo 集成不可达则 skip，不 fail）
-bun run typecheck
-bun run lint
+npm test                  # 单元 + 集成（redis/mongo 集成不可达则 skip，不 fail）
+npm run typecheck
+npm run lint
 ```
 
 ## 关键不变量

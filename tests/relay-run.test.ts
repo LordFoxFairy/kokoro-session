@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import type { StreamItem, StreamProtocol } from "../src/application/event-stream"
 import { Normalizer } from "../src/application/normalize"

@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net"
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
