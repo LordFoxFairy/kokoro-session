@@ -24,7 +24,7 @@ export class MemoryMessageStore implements MessageStore {
     opts?: { afterCursor?: string; limit?: number },
   ): Promise<StoredEvent[]> {
     const list = this.bySession.get(sessionId) ?? []
-    // afterCursor 命中 → 从其后续读；未知 cursor（裁剪/升级残留）→ 退回全量，不空流。
+    // afterCursor 命中 → 从其后续读；未知 cursor → 退回全量，不空流。
     let start = 0
     if (opts?.afterCursor !== undefined) {
       const at = list.findIndex((s) => s.cursor === opts.afterCursor)

@@ -429,12 +429,12 @@ describe("GET /sessions/:id/events", () => {
     expect(text).toContain("event: run.completed")
   })
 
-  test("falls back to full replay when Last-Event-ID is not a transport cursor (upgrade transition)", async () => {
+  test("falls back to full replay when Last-Event-ID is not a transport cursor", async () => {
     const deps = makeDeps()
     await listen(deps)
 
-    const sessionId = "ses_legacy"
-    const runId = "run_legacy"
+    const sessionId = "ses_bad_cursor"
+    const runId = "run_bad_cursor"
     const base = {
       session_id: sessionId,
       conversation_id: sessionId,
@@ -463,12 +463,12 @@ describe("GET /sessions/:id/events", () => {
       },
     ])
 
-    // 升级过渡：浏览器仍持旧的域 cursor 作 Last-Event-ID。它不是合法 transport 续点，
-    // 必须被忽略、退回全量重放（reducer 端 eventId 去重兜底），绝不能静默空流。
+    // 坏 Last-Event-ID 不是合法 transport 续点，必须被忽略、退回全量重放，
+    // 绝不能静默空流。
     const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: {
         accept: "text/event-stream",
-        "last-event-id": `${runId}:0001`,
+        "last-event-id": "not-a-transport-cursor",
       },
       signal: AbortSignal.timeout(2000),
     })
@@ -507,6 +507,18 @@ describe("HTTP boundary contract", () => {
     expect(res.headers.get("content-type")).toContain("application/json")
     const body = (await res.json()) as { error: string }
     expect(body.error).toContain("executionStyle")
+  })
+
+  test("400 when permissionMode is not supported by the agent", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello", permissionMode: "plan" }),
+    })
+    expect(res.status).toBe(400)
+    expect(res.headers.get("content-type")).toContain("application/json")
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toContain("permissionMode")
   })
 
   // 错误方法打到已知资源路径：当前契约无专门 405，一律落 404——钉死之，避免静默行为漂移。
@@ -561,6 +573,7 @@ describe("POST run control (HITL)", () => {
     expect(items[0]?.event).toEqual({
       kind: "run.resume",
       run_id: "run_1",
+      session_id: "s1",
       decisions: [{ type: "approve", tool_id: "call-A" }],
     })
   })
@@ -571,7 +584,11 @@ describe("POST run control (HITL)", () => {
     const res = await postControl("run_1", { kind: "run.cancel" })
     expect(res.status).toBe(202)
     const items = await deps.bus.readAll(REQUESTS_STREAM)
-    expect(items[0]?.event).toEqual({ kind: "run.cancel", run_id: "run_1" })
+    expect(items[0]?.event).toEqual({
+      kind: "run.cancel",
+      run_id: "run_1",
+      session_id: "s1",
+    })
   })
 
   test("202 carries same-frame multi-tool decisions in one resume (approve A + reject B)", async () => {

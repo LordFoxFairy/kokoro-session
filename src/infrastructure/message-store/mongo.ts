@@ -62,7 +62,7 @@ export class MongoMessageStore implements MessageStore {
     opts?: { afterCursor?: string; limit?: number },
   ): Promise<StoredEvent[]> {
     await this.ensureIndex()
-    // afterCursor 命中 → 以其 _id 续读；未命中（裁剪/升级残留）→ 不加过滤，退回全量（不空流）。
+    // afterCursor 命中 → 以其 _id 续读；未命中 → 不加过滤，退回全量（不空流）。
     const anchor =
       opts?.afterCursor === undefined
         ? null

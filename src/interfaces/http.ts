@@ -40,7 +40,7 @@ const startMessageBodySchema = z
     content: z.string().min(1),
     conversationId: z.string().optional(),
     executionStyle: z.enum(["fast", "thinking"]).optional(),
-    permissionMode: z.enum(["auto", "default", "plan"]).optional(),
+    permissionMode: z.enum(["auto", "default"]).optional(),
   })
   .strict()
 
@@ -132,8 +132,13 @@ async function handleRunControl(ctx: RouteContext): Promise<void> {
   }
   await sendRunControl(
     body.kind === "run.cancel"
-      ? { kind: "run.cancel", runId: ctx.params.runId! }
-      : { kind: "run.resume", runId: ctx.params.runId!, decisions: body.decisions },
+      ? { kind: "run.cancel", runId: ctx.params.runId!, sessionId: ctx.params.sessionId! }
+      : {
+          kind: "run.resume",
+          runId: ctx.params.runId!,
+          sessionId: ctx.params.sessionId!,
+          decisions: body.decisions,
+        },
     { bus: ctx.deps.bus },
   )
   ctx.res.statusCode = 202

@@ -7,8 +7,8 @@ import { parseSessionEvent, type SessionEvent } from "../domain/session-event"
 import { liveStream } from "../infrastructure/live-bus"
 import { toSseChunk } from "../infrastructure/sse"
 
-// Last-Event-ID 仅当是传输层游标（memory 纯数字 / redis "ms-seq"）才作续点；域 cursor 或畸形值
-// 一律忽略、退回全量重放（reducer 端 eventId 去重），避免升级过渡期出现空流。
+// Last-Event-ID 仅当是传输层游标（memory 纯数字 / redis "ms-seq"）才作续点；畸形值
+// 一律忽略、退回全量重放（reducer 端 eventId 去重），避免坏续点造成空流。
 export function resumeCursor(lastEventId: string | string[] | undefined): string | undefined {
   if (typeof lastEventId !== "string") return undefined
   return /^\d+(-\d+)?$/.test(lastEventId) ? lastEventId : undefined

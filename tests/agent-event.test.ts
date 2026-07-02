@@ -83,7 +83,7 @@ describe("agentEventSchema", () => {
     expect(parsed.event).toBe("tool_call_awaiting")
   })
 
-  test("rejects legacy tool_call_awaiting without allowed decisions", () => {
+  test("rejects stale tool_call_awaiting without allowed decisions", () => {
     expect(() =>
       agentEventSchema.parse({
         event: "tool_call_awaiting",

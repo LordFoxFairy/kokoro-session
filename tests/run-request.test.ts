@@ -47,12 +47,12 @@ describe("runRequestSchema", () => {
       session_id: "ses_01",
       conversation_id: "conv_01",
       input: "hello",
-      permission_mode: "plan",
+      permission_mode: "default",
     })
-    expect(parsed.permission_mode).toBe("plan")
+    expect(parsed.permission_mode).toBe("default")
   })
 
-  test("rejects permission_mode outside auto/default/plan", () => {
+  test("rejects permission_mode outside auto/default", () => {
     expect(() =>
       runRequestSchema.parse({
         kind: "run.request",

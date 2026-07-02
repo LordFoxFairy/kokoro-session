@@ -43,17 +43,22 @@ export class RunControlDecisionError extends Error {
   }
 }
 
-// 出站到 agent 请求流（kokoro:runs:requests，与 run.request 同流）的 HITL 反向消息。run_id 由
-// session 据 URL 注入。run.resume 携逐工具决策恢复暂停；run.cancel 放弃整个 run。
+// 出站到 agent 请求流（kokoro:runs:requests，与 run.request 同流）的 HITL 反向消息。run_id/session_id
+// 由 session 据 URL 注入；agent 再以原 RunRequest 校验归属，避免跨 session 控制 run。
 export const runResumeSchema = z
   .object({
     kind: z.literal("run.resume"),
     run_id: z.string().min(1),
+    session_id: z.string().min(1),
     decisions: z.array(resumeDecisionSchema).min(1),
   })
   .strict()
 export const runCancelSchema = z
-  .object({ kind: z.literal("run.cancel"), run_id: z.string().min(1) })
+  .object({
+    kind: z.literal("run.cancel"),
+    run_id: z.string().min(1),
+    session_id: z.string().min(1),
+  })
   .strict()
 
 // HTTP 入站体（web POST /control 的 JSON body）：与出站消息同形但不含 run_id（由路径参数注入）。
