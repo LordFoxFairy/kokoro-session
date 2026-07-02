@@ -1,3 +1,5 @@
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { z } from "zod"
 
 import { dispatchRelays } from "./application/dispatch-relays"
@@ -12,6 +14,10 @@ const portSchema = z.coerce.number().int().min(1).max(65535).catch(DEFAULT_PORT)
 
 export function resolvePort(raw: string | undefined): number {
   return portSchema.parse(raw ?? String(DEFAULT_PORT))
+}
+
+export function isDirectEntry(metaUrl: string, argvPath: string | undefined): boolean {
+  return argvPath !== undefined && fileURLToPath(metaUrl) === resolve(argvPath)
 }
 
 function main(): void {
@@ -44,6 +50,6 @@ process.on("uncaughtException", (error: unknown) => {
 })
 
 // 仅作为入口直接运行时启动服务；被测试 import 时不应拉起 HTTP 监听。
-if (import.meta.main) {
+if (isDirectEntry(import.meta.url, process.argv[1])) {
   main()
 }

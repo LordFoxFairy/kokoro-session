@@ -1,5 +1,5 @@
-// mongodb 固定 6.3.0（精确、非 caret）：7.x 的 bson 在静态初始化里调用 node:v8 startupSnapshot
-// .isBuildingSnapshot()，Bun 尚未实现 → import 即 ERR_NOT_IMPLEMENTED 崩。升级须先验 `bun -e import("mongodb")`。
+// mongodb 固定 6.3.0（精确、非 caret）：升级前必须用 Node runtime 跑 import + Mongo 集成测试；
+// 7.x 的 bson 启动路径曾触发 runtime 兼容问题，不能只看类型通过。
 import { type Collection, type Filter, MongoClient } from "mongodb"
 
 import type { MessageStore, StoredEvent } from "../../application/event-stream"
@@ -28,7 +28,10 @@ export class MongoMessageStore implements MessageStore {
 
   // 惰性建一次唯一索引：append 的 upsert 去重与并发安全都靠它。
   private ensureIndex(): Promise<unknown> {
-    this.indexReady ??= this.coll.createIndex({ session_id: 1, event_id: 1 }, { unique: true })
+    this.indexReady ??= Promise.all([
+      this.coll.createIndex({ session_id: 1, event_id: 1 }, { unique: true }),
+      this.coll.createIndex({ session_id: 1, "event.run_id": 1, _id: 1 }),
+    ])
     return this.indexReady
   }
 
@@ -74,6 +77,15 @@ export class MongoMessageStore implements MessageStore {
     if (opts?.limit !== undefined) query.limit(opts.limit)
     const docs = await query.toArray()
     // 出库即过 Zod：DB 脏行宁可在此抛错也不回放给 web。
+    return docs.map((d) => ({ cursor: d.cursor, event: parseSessionEvent(d.event) }))
+  }
+
+  async readRun(sessionId: string, runId: string): Promise<StoredEvent[]> {
+    await this.ensureIndex()
+    const docs = await this.coll
+      .find({ session_id: sessionId, "event.run_id": runId } as Filter<MessageDoc>)
+      .sort({ _id: 1 })
+      .toArray()
     return docs.map((d) => ({ cursor: d.cursor, event: parseSessionEvent(d.event) }))
   }
 

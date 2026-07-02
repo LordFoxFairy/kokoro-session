@@ -30,4 +30,5 @@ export type StoredEvent = {
 export interface MessageStore {
   append(sessionId: string, events: StoredEvent[]): Promise<void>
   read(sessionId: string, opts?: { afterCursor?: string; limit?: number }): Promise<StoredEvent[]>
+  readRun(sessionId: string, runId: string): Promise<StoredEvent[]>
 }

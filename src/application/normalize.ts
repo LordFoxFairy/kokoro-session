@@ -92,6 +92,10 @@ export class Normalizer {
             tool_id: event.data.tool_id,
             name: event.data.name,
             args: event.data.args,
+            description: event.data.description,
+            allowed_decisions: event.data.allowed_decisions,
+            kind: event.data.kind,
+            editable: event.data.editable,
           }),
         ]
       case "tool_call_end":

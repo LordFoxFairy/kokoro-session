@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
-import { resolvePort } from "../src/main"
+import { isDirectEntry, resolvePort } from "../src/main"
 
 describe("resolvePort", () => {
   test("valid in-range port string parses to that number", () => {
@@ -33,5 +33,26 @@ describe("resolvePort", () => {
 
   test("empty string falls back to 3001", () => {
     expect(resolvePort("")).toBe(3001)
+  })
+})
+
+describe("isDirectEntry", () => {
+  test("matches when argv points at the same module file", () => {
+    const entryUrl = new URL("../src/main.ts", import.meta.url)
+
+    expect(isDirectEntry(entryUrl.href, new URL(entryUrl).pathname)).toBe(true)
+  })
+
+  test("does not match when the module was imported by another entry", () => {
+    const entryUrl = new URL("../src/main.ts", import.meta.url)
+    const otherEntry = new URL("./test-runner.ts", import.meta.url)
+
+    expect(isDirectEntry(entryUrl.href, otherEntry.pathname)).toBe(false)
+  })
+
+  test("does not match when argv path is absent", () => {
+    const entryUrl = new URL("../src/main.ts", import.meta.url)
+
+    expect(isDirectEntry(entryUrl.href, undefined)).toBe(false)
   })
 })

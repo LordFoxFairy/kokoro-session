@@ -5,7 +5,12 @@ import { z, ZodError } from "zod"
 import type { MessageStore, StreamProtocol } from "../application/event-stream"
 import { sendRunControl } from "../application/send-run-control"
 import { startRun } from "../application/start-run"
-import { runControlBodySchema } from "../domain/run-control"
+import {
+  pendingApprovalsFromEvents,
+  runControlBodySchema,
+  RunControlDecisionError,
+  validateResumeDecisions,
+} from "../domain/run-control"
 import { streamSession } from "./sse-endpoint"
 
 const allowedBrowserOrigins = new Set([
@@ -29,15 +34,15 @@ export type BuildServerDependencies = {
   messageStore: MessageStore
 }
 
-// 入站 query 在 interfaces 层一次性 Zod 解析：空 input → ZodError → 顶层 400；.strip 兜底滤未知键。
-const startRunQuerySchema = z
+// 用户消息入口读 JSON body：content 是标准输入；其它 runtime 选项明确列出，未知键 fail-loud。
+const startMessageBodySchema = z
   .object({
-    input: z.string().min(1),
-    conversation_id: z.string().optional(),
-    execution_style: z.string().optional(),
-    permission_mode: z.string().optional(),
+    content: z.string().min(1),
+    conversationId: z.string().optional(),
+    executionStyle: z.enum(["fast", "thinking"]).optional(),
+    permissionMode: z.enum(["auto", "default", "plan"]).optional(),
   })
-  .strip()
+  .strict()
 
 type Route = {
   method: "GET" | "POST"
@@ -57,38 +62,31 @@ type RouteContext = {
 const routes: Route[] = [
   {
     method: "POST",
-    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/runs$/,
-    handle: handleStartRun,
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/messages$/,
+    handle: handleStartMessage,
   },
   {
     method: "GET",
-    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/stream$/,
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/events$/,
     handle: (ctx) =>
       streamSession(ctx.req, ctx.res, ctx.deps.bus, ctx.deps.messageStore, ctx.params.sessionId!),
   },
   {
     method: "POST",
-    pattern: /^\/sessions\/[^/]+\/runs\/(?<runId>[^/]+)\/control$/,
+    pattern: /^\/sessions\/(?<sessionId>[^/]+)\/runs\/(?<runId>[^/]+)\/control$/,
     handle: handleRunControl,
   },
 ]
 
-async function handleStartRun(ctx: RouteContext): Promise<void> {
-  // 逐键取首值（与 URLSearchParams.get 一致）：重复键退化为最后值会悄悄换语义；null→undefined 交 .optional。
-  const params = ctx.url.searchParams
-  const query = startRunQuerySchema.parse({
-    input: params.get("input") ?? undefined,
-    conversation_id: params.get("conversation_id") ?? undefined,
-    execution_style: params.get("execution_style") ?? undefined,
-    permission_mode: params.get("permission_mode") ?? undefined,
-  })
+async function handleStartMessage(ctx: RouteContext): Promise<void> {
+  const body = startMessageBodySchema.parse(jsonBodySchema.parse(await readBody(ctx.req)))
   const result = await startRun(
     {
       sessionId: ctx.params.sessionId!,
-      conversationId: query.conversation_id,
-      input: query.input,
-      executionStyle: query.execution_style,
-      permissionMode: query.permission_mode,
+      conversationId: body.conversationId,
+      input: body.content,
+      executionStyle: body.executionStyle,
+      permissionMode: body.permissionMode,
     },
     { bus: ctx.deps.bus },
   )
@@ -122,6 +120,16 @@ async function readBody(req: IncomingMessage): Promise<string> {
 // 同帧多工具须在一条 run.resume 内携全部决策（agent 按 tool_id 一一对齐，缺/多即 fail-loud）。
 async function handleRunControl(ctx: RouteContext): Promise<void> {
   const body = runControlBodySchema.parse(jsonBodySchema.parse(await readBody(ctx.req)))
+  if (body.kind === "run.resume") {
+    const runEvents = await ctx.deps.messageStore.readRun(ctx.params.sessionId!, ctx.params.runId!)
+    validateResumeDecisions(
+      body.decisions,
+      pendingApprovalsFromEvents(
+        runEvents.map((stored) => stored.event),
+        ctx.params.runId!,
+      ),
+    )
+  }
   await sendRunControl(
     body.kind === "run.cancel"
       ? { kind: "run.cancel", runId: ctx.params.runId! }
@@ -141,12 +149,15 @@ export function buildServer(dependencies: BuildServerDependencies) {
         return
       }
       // ZodError 来自入参 schema 校验：客户端错误归 400，不让其穿透成 500。
-      if (error instanceof ZodError) {
+      if (error instanceof ZodError || error instanceof RunControlDecisionError) {
         res.statusCode = 400
         res.setHeader("content-type", "application/json")
-        const detail = error.issues
-          .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-          .join("; ")
+        const detail =
+          error instanceof ZodError
+            ? error.issues
+                .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+                .join("; ")
+            : error.message
         res.end(JSON.stringify({ error: detail || "invalid request" }))
         return
       }

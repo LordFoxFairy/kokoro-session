@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { Normalizer } from "../src/application/normalize"
 import {
@@ -370,20 +370,42 @@ describe("Normalizer", () => {
     const out1 = f.feed({
       event: "tool_call_awaiting",
       ...ENV,
-      data: { segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "a" } },
+      data: {
+        segment_id: "m1",
+        tool_id: "t1",
+        name: "fetch",
+        args: { url: "a" },
+        description: "需要批准 fetch",
+        allowed_decisions: ["approve", "edit", "reject"],
+        kind: "tool_approval",
+        editable: true,
+      },
     })
     const out2 = f.feed({
       event: "tool_call_awaiting",
       ...ENV,
-      data: { segment_id: "m1", tool_id: "t2", name: "write", args: { path: "b" } },
+      data: {
+        segment_id: "m1",
+        tool_id: "t2",
+        name: "ask_user",
+        args: { question: "继续吗" },
+        description: "需要用户回答",
+        allowed_decisions: ["respond"],
+        kind: "ask_user",
+        editable: false,
+      },
     })
     expect(out1.map((e) => e.event)).toEqual(["tool.awaiting_approval"])
     expect(out2.map((e) => e.event)).toEqual(["tool.awaiting_approval"])
     expect(payloadOf(out1[0], "tool.awaiting_approval")).toMatchObject({
       segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "a" },
+      description: "需要批准 fetch", allowed_decisions: ["approve", "edit", "reject"],
+      kind: "tool_approval", editable: true,
     })
     expect(payloadOf(out2[0], "tool.awaiting_approval")).toMatchObject({
-      segment_id: "m1", tool_id: "t2", name: "write", args: { path: "b" },
+      segment_id: "m1", tool_id: "t2", name: "ask_user", args: { question: "继续吗" },
+      description: "需要用户回答", allowed_decisions: ["respond"],
+      kind: "ask_user", editable: false,
     })
     for (const e of [...out1, ...out2]) expect(() => parseSessionEvent(e)).not.toThrow()
   })

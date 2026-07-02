@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect } from "vitest"
 
 import type { MessageStore, StoredEvent } from "../src/application/event-stream"
 import type { SessionEvent } from "../src/domain/session-event"
@@ -42,8 +42,12 @@ export async function assertBehaviour(store: MessageStore): Promise<void> {
   // limit 分页。
   expect((await store.read(sid, { limit: 2 })).map((s) => s.cursor)).toEqual(["c1", "c2"])
 
+  expect((await store.readRun(sid, "run_1")).map((s) => s.cursor)).toEqual(["c1", "c2", "c3"])
+  expect(await store.readRun(sid, "run_unknown")).toEqual([])
+
   // 会话隔离：read 按 sessionId 只取自己的；未知会话 → []。
   expect(await store.read("ses_other")).toEqual([])
+  expect(await store.readRun("ses_other", "run_1")).toEqual([])
 
   // 未知 afterCursor（已被裁剪/升级残留）→ 退回全量，web 端 event_id 去重兜底，绝不空流。
   expect((await store.read(sid, { afterCursor: "nope" })).map((s) => s.cursor)).toEqual([

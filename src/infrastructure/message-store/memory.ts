@@ -33,4 +33,9 @@ export class MemoryMessageStore implements MessageStore {
     const end = opts?.limit === undefined ? list.length : start + opts.limit
     return Promise.resolve(list.slice(start, end))
   }
+
+  readRun(sessionId: string, runId: string): Promise<StoredEvent[]> {
+    const list = this.bySession.get(sessionId) ?? []
+    return Promise.resolve(list.filter((stored) => stored.event.run_id === runId))
+  }
 }

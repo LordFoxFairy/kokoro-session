@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net"
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
 import { Normalizer } from "../src/application/normalize"
 import { relayRun } from "../src/application/relay-run"
@@ -17,6 +17,46 @@ function makeDeps() {
   const bus = new MemoryStream()
   const messageStore = new MemoryMessageStore()
   return { bus, messageStore }
+}
+
+function pendingApprovalEvent(
+  runId: string,
+  toolId: string,
+  allowedDecisions: string[],
+): SessionEvent {
+  return {
+    event: "tool.awaiting_approval",
+    event_id: `evt_${runId}_${toolId}_awaiting`,
+    seq: 1,
+    session_id: "s1",
+    conversation_id: "s1",
+    run_id: runId,
+    timestamp: "2026-07-02T00:00:00.000Z",
+    payload: {
+      segment_id: "seg_1",
+      tool_id: toolId,
+      name: allowedDecisions.includes("respond") ? "ask_user" : "fetch",
+      args: {},
+      description: "需要用户处理",
+      allowed_decisions: allowedDecisions,
+      kind: allowedDecisions.includes("respond") ? "ask_user" : "tool_approval",
+      editable: allowedDecisions.includes("edit"),
+    },
+  }
+}
+
+async function seedPending(
+  deps: ReturnType<typeof makeDeps>,
+  runId: string,
+  pending: Array<{ toolId: string; allowedDecisions: string[] }>,
+): Promise<void> {
+  await deps.messageStore.append(
+    "s1",
+    pending.map((p, index) => ({
+      cursor: `c${index + 1}`,
+      event: pendingApprovalEvent(runId, p.toolId, p.allowedDecisions),
+    })),
+  )
 }
 
 // 模拟 relay：先发布 live（拿 cursor）再持久 DB，返回各事件的 transport cursor（= SSE id 轴）。
@@ -52,14 +92,34 @@ afterEach(async () => {
   }
 })
 
-describe("POST /sessions/:id/runs", () => {
+describe("POST /sessions/:id/messages", () => {
+  test("POST /messages starts a run from a JSON message body", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await fetch(`${baseUrl}/sessions/ses_msg/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello from body" }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { runId: string }
+    expect(body.runId).toMatch(/^run_/)
+    const requests = await deps.bus.readAll(REQUESTS_STREAM)
+    const inputs = requests.map((r) => runRequestSchema.parse(r.event).input)
+    expect(inputs).toEqual(["hello from body"])
+  })
+})
+
+describe("POST /sessions/:id/messages", () => {
   beforeEach(async () => {
     await listen(makeDeps())
   })
 
   test("returns 200 with a runId", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hello`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello" }),
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { runId: string }
@@ -71,21 +131,49 @@ describe("POST /sessions/:id/runs", () => {
     expect(res.status).toBe(404)
   })
 
-  // 回归：重复 input 取首值（与 URLSearchParams.get 一致），不得退化为最后值。
-  test("a duplicated input query key resolves to the first value", async () => {
+  test("writes the message content into the run request stream", async () => {
     const deps = makeDeps()
     await listen(deps)
-    const res = await fetch(`${baseUrl}/sessions/ses_dup_q/runs?input=first&input=second`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_body/messages?input=ignored`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "from body" }),
     })
     expect(res.status).toBe(200)
     const requests = await deps.bus.readAll(REQUESTS_STREAM)
     const inputs = requests.map((r) => runRequestSchema.parse(r.event).input)
-    expect(inputs).toEqual(["first"])
+    expect(inputs).toEqual(["from body"])
   })
 })
 
-describe("GET /sessions/:id/stream", () => {
+describe("GET /sessions/:id/events", () => {
+  test("GET /events replays normalized AGUI events as standard EventSource SSE", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const sessionId = "ses_events"
+    await seed(deps, sessionId, [
+      {
+        event: "run.completed",
+        event_id: "evt_done",
+        seq: 1,
+        session_id: sessionId,
+        conversation_id: sessionId,
+        run_id: "run_1",
+        timestamp: "2026-05-30T00:00:00.000Z",
+        payload: { status: "completed" },
+      },
+    ])
+
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(2000),
+    })
+
+    expect(res.headers.get("content-type")).toContain("text/event-stream")
+    const text = await readSomeSse(res)
+    expect(text).toContain("event: run.completed")
+  })
+
   test("replays normalized AGUI events as SSE after relay drains", async () => {
     const deps = makeDeps()
     await listen(deps)
@@ -116,7 +204,7 @@ describe("GET /sessions/:id/stream", () => {
     )
     await relayRun({ bus: deps.bus, messageStore: deps.messageStore, normalizer, sessionId, runId })
 
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: { accept: "text/event-stream" },
       signal: AbortSignal.timeout(2000),
     })
@@ -163,7 +251,7 @@ describe("GET /sessions/:id/stream", () => {
       },
     ])
 
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: { accept: "text/event-stream" },
       signal: AbortSignal.timeout(3000),
     })
@@ -229,7 +317,7 @@ describe("GET /sessions/:id/stream", () => {
       payload: { run_id: runId, status: "completed" },
     })
 
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: { accept: "text/event-stream" },
       signal: AbortSignal.timeout(2000),
     })
@@ -274,7 +362,7 @@ describe("GET /sessions/:id/stream", () => {
       },
     ])
 
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: { accept: "text/event-stream" },
       signal: AbortSignal.timeout(2000),
     })
@@ -326,7 +414,7 @@ describe("GET /sessions/:id/stream", () => {
       },
     ])
 
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": cursors[0] as string,
@@ -377,7 +465,7 @@ describe("GET /sessions/:id/stream", () => {
 
     // 升级过渡：浏览器仍持旧的域 cursor 作 Last-Event-ID。它不是合法 transport 续点，
     // 必须被忽略、退回全量重放（reducer 端 eventId 去重兜底），绝不能静默空流。
-    const res = await fetch(`${baseUrl}/sessions/${sessionId}/stream`, {
+    const res = await fetch(`${baseUrl}/sessions/${sessionId}/events`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": `${runId}:0001`,
@@ -396,34 +484,39 @@ describe("HTTP boundary contract", () => {
     await listen(makeDeps())
   })
 
-  test("400 with JSON error body locating to input when input is missing", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs`, { method: "POST" })
+  test("400 with JSON error body locating to content when content is missing", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
     const body = (await res.json()) as { error: string }
-    expect(body.error).toContain("input")
+    expect(body.error).toContain("content")
   })
 
   // 非法枚举是客户端入参错误：必须 400 而非让 ZodError 穿透成 500。
-  test("400 when execution_style is not a known enum value", async () => {
-    const res = await fetch(
-      `${baseUrl}/sessions/ses_01/runs?input=hello&execution_style=bogus`,
-      { method: "POST" },
-    )
+  test("400 when executionStyle is not a known enum value", async () => {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello", executionStyle: "bogus" }),
+    })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
     const body = (await res.json()) as { error: string }
-    expect(body.error).toContain("execution_style")
+    expect(body.error).toContain("executionStyle")
   })
 
   // 错误方法打到已知资源路径：当前契约无专门 405，一律落 404——钉死之，避免静默行为漂移。
   test("404 for a known resource path with the wrong method", async () => {
-    const postStream = await fetch(`${baseUrl}/sessions/ses_01/stream`, { method: "POST" })
+    const postStream = await fetch(`${baseUrl}/sessions/ses_01/events`, { method: "POST" })
     expect(postStream.status).toBe(404)
-    const deleteRuns = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hi`, {
+    const deleteMessages = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
       method: "DELETE",
     })
-    expect(deleteRuns.status).toBe(404)
+    expect(deleteMessages.status).toBe(404)
   })
 })
 
@@ -435,8 +528,10 @@ describe("HTTP error envelope", () => {
       throw new Error("redis down")
     }
     await listen(deps)
-    const res = await fetch(`${baseUrl}/sessions/ses_01/runs?input=hello`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_01/messages`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello" }),
     })
     expect(res.status).toBe(500)
     expect(await res.text()).toBe("redis down")
@@ -454,6 +549,7 @@ describe("POST run control (HITL)", () => {
 
   test("202 and writes run.resume with the per-tool decision to the requests stream", async () => {
     const deps = makeDeps()
+    await seedPending(deps, "run_1", [{ toolId: "call-A", allowedDecisions: ["approve", "edit", "reject"] }])
     await listen(deps)
     const res = await postControl("run_1", {
       kind: "run.resume",
@@ -480,6 +576,10 @@ describe("POST run control (HITL)", () => {
 
   test("202 carries same-frame multi-tool decisions in one resume (approve A + reject B)", async () => {
     const deps = makeDeps()
+    await seedPending(deps, "run_1", [
+      { toolId: "call-A", allowedDecisions: ["approve", "edit", "reject"] },
+      { toolId: "call-B", allowedDecisions: ["approve", "edit", "reject"] },
+    ])
     await listen(deps)
     const res = await postControl("run_1", {
       kind: "run.resume",
@@ -495,6 +595,7 @@ describe("POST run control (HITL)", () => {
 
   test("202 relays an edit decision with edited_action", async () => {
     const deps = makeDeps()
+    await seedPending(deps, "run_1", [{ toolId: "call-A", allowedDecisions: ["approve", "edit", "reject"] }])
     await listen(deps)
     const edited = { name: "bash", args: { cmd: "ls" } }
     const res = await postControl("run_1", {
@@ -524,6 +625,29 @@ describe("POST run control (HITL)", () => {
     })
     expect(res.status).toBe(400)
     expect(res.headers.get("content-type")).toContain("application/json")
+  })
+
+  test("400 when a decision is not allowed by the current pending pause", async () => {
+    const deps = makeDeps()
+    await seedPending(deps, "run_1", [{ toolId: "call-A", allowedDecisions: ["respond"] }])
+    await listen(deps)
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "approve", tool_id: "call-A" }],
+    })
+    expect(res.status).toBe(400)
+    expect(await deps.bus.readAll(REQUESTS_STREAM)).toEqual([])
+  })
+
+  test("400 when the run has no pending pause in the session store", async () => {
+    const deps = makeDeps()
+    await listen(deps)
+    const res = await postControl("run_1", {
+      kind: "run.resume",
+      decisions: [{ type: "approve", tool_id: "call-A" }],
+    })
+    expect(res.status).toBe(400)
+    expect(await deps.bus.readAll(REQUESTS_STREAM)).toEqual([])
   })
 
   test("400 for a decision missing tool_id (multi-tool attribution is required)", async () => {
@@ -567,9 +691,10 @@ describe("CORS", () => {
 
   // allowlist 之外的源不回显 allow-origin（浏览器侧拦截），但请求本身正常服务。
   test("omits allow-origin for a non-allowlisted origin while still serving the request", async () => {
-    const res = await fetch(`${baseUrl}/sessions/ses_cors/runs?input=hello`, {
+    const res = await fetch(`${baseUrl}/sessions/ses_cors/messages`, {
       method: "POST",
-      headers: { origin: "http://evil.example" },
+      headers: { origin: "http://evil.example", "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello" }),
     })
     expect(res.status).toBe(200)
     expect(res.headers.get("access-control-allow-origin")).toBeNull()

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { agentEventSchema } from "../src/domain/agent-event"
 
@@ -69,9 +69,28 @@ describe("agentEventSchema", () => {
     const parsed = agentEventSchema.parse({
       event: "tool_call_awaiting",
       ...ENV,
-      data: { segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "x" } },
+      data: {
+        segment_id: "m1",
+        tool_id: "t1",
+        name: "ask_user",
+        args: { question: "继续吗" },
+        description: "需要用户回答",
+        allowed_decisions: ["respond"],
+        kind: "ask_user",
+        editable: false,
+      },
     })
     expect(parsed.event).toBe("tool_call_awaiting")
+  })
+
+  test("rejects legacy tool_call_awaiting without allowed decisions", () => {
+    expect(() =>
+      agentEventSchema.parse({
+        event: "tool_call_awaiting",
+        ...ENV,
+        data: { segment_id: "m1", tool_id: "t1", name: "fetch", args: { url: "x" } },
+      }),
+    ).toThrow()
   })
 
   test("rejects agent_done with a status outside its literal", () => {

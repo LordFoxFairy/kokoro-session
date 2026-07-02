@@ -8,7 +8,7 @@ export type SessionEventName = z.infer<typeof sessionEventSchema>["event"]
 export type SessionEvent = {
   event: SessionEventName
   event_id: string
-  // seq：session 透传 agent 的一等发射序号，是真实发射顺序的唯一排序源。
+  // seq：session 从 transport cursor 派生的渲染顺序号；不是 agent 业务字段，也不是 replay cursor。
   seq: number
   session_id: string
   conversation_id: string
@@ -33,7 +33,7 @@ const sessionEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("message.delta"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), delta: z.string(), role: z.string().min(1) }).strict() }).strict(),
   z.object({ event: z.literal("message.completed"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), role: z.string().min(1), content: z.string() }).strict() }).strict(),
   z.object({ event: z.literal("tool.invoked"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), args: z.record(z.unknown()) }).strict() }).strict(),
-  z.object({ event: z.literal("tool.awaiting_approval"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), args: z.record(z.unknown()) }).strict() }).strict(),
+  z.object({ event: z.literal("tool.awaiting_approval"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), args: z.record(z.unknown()), description: z.string(), allowed_decisions: z.array(z.enum(["approve", "edit", "reject", "respond"])), kind: z.enum(["tool_approval", "ask_user"]), editable: z.boolean() }).strict() }).strict(),
   z.object({ event: z.literal("tool.returned"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), tool_id: z.string().min(1), name: z.string().min(1), result: z.string(), is_error: z.boolean(), rejected: z.boolean().optional(), reject_reason: z.string().optional(), responded: z.boolean().optional() }).strict() }).strict(),
   z.object({ event: z.literal("todo.updated"), ...envelopeFields, payload: z.object({ todos: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]) }).strict()) }).strict() }).strict(),
   z.object({ event: z.literal("subagent.started"), ...envelopeFields, payload: z.object({ segment_id: z.string().min(1), subagent_id: z.string().min(1), name: z.string().min(1), description: z.string(), subagent_type: z.string().min(1), source: z.enum(["built-in", "config-custom", "runtime-custom"]) }).strict() }).strict(),
